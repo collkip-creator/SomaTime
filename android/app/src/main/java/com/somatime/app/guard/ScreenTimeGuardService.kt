@@ -71,14 +71,12 @@ class ScreenTimeGuardService : Service() {
                 }
 
                 val uiState = store.state.value
-                val child = uiState.selectedChild
                 val foregroundPkg = UsageAccessHelper.getForegroundPackageName(this@ScreenTimeGuardService)
                 if (foregroundPkg != null) {
                     store.updateForegroundApp(foregroundPkg)
                 }
 
-                val isLocked = child.isLocked || child.availableScreenSeconds <= 0
-                val isTakeoverEnforced = isLocked && (uiState.handOffActive || child.isPaired)
+                val isTakeoverEnforced = uiState.isTakeoverLocked
 
                 if (!isTakeoverEnforced) {
                     takeoverTriggered = false

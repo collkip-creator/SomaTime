@@ -15,9 +15,7 @@ class SomaGuardAccessibilityService : AccessibilityService() {
         if (event == null) return
         val store = SomaTimeStore.getInstance(this)
         val uiState = store.state.value
-        val child = uiState.selectedChild
-        val isTakeoverActive = (child.isLocked || child.availableScreenSeconds <= 0) &&
-            (uiState.handOffActive || child.isPaired)
+        val isTakeoverActive = uiState.isTakeoverLocked
 
         if (!isTakeoverActive) return
 

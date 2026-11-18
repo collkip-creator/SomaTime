@@ -1,6 +1,8 @@
 package com.somatime.app
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -75,7 +77,7 @@ class MainActivity : ComponentActivity() {
 
     @Volatile
     private var takeoverLockEnforced: Boolean = false
-    private var isLockTaskActive: Boolean = false
+    private var isActivityResumed: Boolean = false
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -111,6 +113,17 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIncomingIntent(intent, SomaTimeStore.getInstance(this))
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isActivityResumed = true
+        applyTakeoverSystemUi(takeoverLockEnforced)
+    }
+
+    override fun onPause() {
+        isActivityResumed = false
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -153,22 +166,22 @@ class MainActivity : ComponentActivity() {
         return super.onKeyUp(keyCode, event)
     }
 
+    private fun isActuallyInLockTaskMode(): Boolean {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
+        return am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+    }
+
     private fun applyTakeoverSystemUi(locked: Boolean) {
         if (locked) {
             hideSystemBars()
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            if (!isLockTaskActive) {
-                runCatching {
-                    startLockTask()
-                    isLockTaskActive = true
-                }
+            // Pin ONLY when the learner interruption popup is actually foregrounded and resumed
+            if (isActivityResumed && !isActuallyInLockTaskMode()) {
+                runCatching { startLockTask() }
             }
         } else {
-            if (isLockTaskActive) {
-                runCatching {
-                    stopLockTask()
-                    isLockTaskActive = false
-                }
+            if (isActuallyInLockTaskMode()) {
+                runCatching { stopLockTask() }
             }
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             showSystemBars()
@@ -218,8 +231,11 @@ private fun SomaTimeRoot(
     val uiState by store.state.collectAsState()
     var pinIntent by remember { mutableStateOf<PinIntent?>(null) }
 
-    LaunchedEffect(uiState.selectedChild.id, uiState.selectedChild.isPaired) {
-        if (uiState.selectedChild.isPaired && !uiState.guardServiceRunning) {
+    LaunchedEffect(uiState.roleView, uiState.selectedChild.id, uiState.selectedChild.isPaired, uiState.handOffActive) {
+        if (uiState.roleView == RoleView.CHILD &&
+            (uiState.selectedChild.isPaired || uiState.handOffActive) &&
+            !uiState.guardServiceRunning
+        ) {
             runCatching { ScreenTimeGuardService.start(context) }
         }
     }
@@ -231,10 +247,7 @@ private fun SomaTimeRoot(
         }
     }
 
-    val isTakeoverLocked = uiState.roleView == RoleView.CHILD &&
-        !uiState.showSetupWizard &&
-        (uiState.selectedChild.isLocked || uiState.selectedChild.availableScreenSeconds <= 0) &&
-        (uiState.handOffActive || uiState.selectedChild.isPaired)
+    val isTakeoverLocked = uiState.isTakeoverLocked
 
     LaunchedEffect(isTakeoverLocked) {
         onTakeoverLockChanged(isTakeoverLocked)

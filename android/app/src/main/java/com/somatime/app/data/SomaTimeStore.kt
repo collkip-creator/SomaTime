@@ -58,6 +58,12 @@ data class SomaTimeUiState(
 ) {
     val selectedChild: ChildProfile
         get() = children.firstOrNull { it.id == selectedChildId } ?: children.first()
+
+    val isTakeoverLocked: Boolean
+        get() = roleView == RoleView.CHILD &&
+            !showSetupWizard &&
+            (selectedChild.isLocked || selectedChild.availableScreenSeconds <= 0) &&
+            (handOffActive || selectedChild.isPaired)
 }
 
 class SomaTimeStore private constructor(context: Context) {
