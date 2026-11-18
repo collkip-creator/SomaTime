@@ -54,8 +54,9 @@ class ScreenTimeGuardService : Service() {
 
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
+            var takeoverTriggered = false
             while (isActive) {
-                delay(2000L)
+                delay(1000L)
                 val uiState = store.state.value
                 val child = uiState.selectedChild
                 val foregroundPkg = UsageAccessHelper.getForegroundPackageName(this@ScreenTimeGuardService)
@@ -64,15 +65,25 @@ class ScreenTimeGuardService : Service() {
                 }
 
                 val isLocked = child.isLocked || child.availableScreenSeconds <= 0
-                if (
-                    isLocked &&
-                    foregroundPkg != null &&
-                    foregroundPkg != packageName &&
-                    foregroundPkg in UsageAccessHelper.restrictedEntertainmentPackages
-                ) {
+                if (!isLocked) {
+                    takeoverTriggered = false
+                }
+
+                val openingOtherApp = foregroundPkg != null && foregroundPkg != packageName
+                val shouldTakeOverNow = isLocked && (
+                    !takeoverTriggered ||
+                        (openingOtherApp && foregroundPkg in UsageAccessHelper.restrictedEntertainmentPackages)
+                )
+
+                if (shouldTakeOverNow) {
+                    takeoverTriggered = true
                     val lockIntent = Intent(this@ScreenTimeGuardService, MainActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        putExtra(EXTRA_INTERCEPTED_APP, foregroundPkg)
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        )
+                        putExtra(EXTRA_INTERCEPTED_APP, foregroundPkg ?: "screen_timer_expired")
                     }
                     startActivity(lockIntent)
                 }

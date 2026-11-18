@@ -105,6 +105,8 @@ data class ChildProfile(
     val school: String,
     val classStream: String,
     val deviceMode: DeviceMode,
+    val pairingCode: String,
+    val isPaired: Boolean,
     val dailyCapMins: Int,
     val exchangeRateMins: Int,
     val mandatorySubjects: List<LearningArea>,

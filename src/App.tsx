@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChildMode } from './components/ChildMode';
 import { ParentDashboard } from './components/ParentDashboard';
 import { PinModal } from './components/PinModal';
+import { SetupOnboardingModal } from './components/SetupOnboardingModal';
 import { TeacherPortal } from './components/TeacherPortal';
 import { TopDemoBar } from './components/TopDemoBar';
 import { useSomaTimeStore } from './hooks/useSomaTimeStore';
@@ -16,6 +17,8 @@ type PinIntent =
 export default function App() {
   const store = useSomaTimeStore();
   const [pinIntent, setPinIntent] = useState<PinIntent>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupInitialTab, setSetupInitialTab] = useState<'choice' | 'parent' | 'learner'>('choice');
 
   const handleSelectRole = (nextRole: RoleView) => {
     if (store.handOffActive && store.roleView === 'child' && nextRole !== 'child') {
@@ -25,6 +28,11 @@ export default function App() {
     store.setRoleView(nextRole);
   };
 
+  const openSetup = (tab: 'choice' | 'parent' | 'learner') => {
+    setSetupInitialTab(tab);
+    setSetupOpen(true);
+  };
+
   const pinModalConfig = (() => {
     if (!pinIntent) {
       return { open: false, title: '', subtitle: '', confirmLabel: 'Verify PIN' };
@@ -32,16 +40,16 @@ export default function App() {
     if (pinIntent.kind === 'exit_handoff') {
       return {
         open: true,
-        title: 'Exit Hand-Off Child Lock',
-        subtitle: `Enter Parent PIN (1234) to leave ${store.selectedChild.name}'s locked phone mode.`,
-        confirmLabel: 'Exit to Parent View',
+        title: 'Exit Child Lock Mode',
+        subtitle: `Enter Parent PIN (${store.parentAccount.pin}) to leave ${store.selectedChild.name}'s locked device mode.`,
+        confirmLabel: 'Exit Lock Mode',
       };
     }
     if (pinIntent.kind === 'unlock_child') {
       return {
         open: true,
         title: 'Parent PIN Screen Unlock',
-        subtitle: `Enter Parent PIN (1234) to grant +15 mins of screen time to ${store.selectedChild.name}.`,
+        subtitle: `Enter Parent PIN (${store.parentAccount.pin}) to grant +15 mins of watch time to ${store.selectedChild.name}.`,
         confirmLabel: 'Unlock +15 Mins',
       };
     }
@@ -75,6 +83,7 @@ export default function App() {
         handOffActive={store.handOffActive}
         selectedChild={store.selectedChild}
         onSelectRole={handleSelectRole}
+        onOpenSetup={() => openSetup('choice')}
         onResetDemo={store.resetDemoData}
       />
 
@@ -82,8 +91,12 @@ export default function App() {
         <ParentDashboard
           childrenList={store.children}
           selectedChild={store.selectedChild}
+          parentPin={store.parentAccount.pin}
           onSelectChild={store.setSelectedChildId}
           onUpdateChild={store.updateChildSettings}
+          onRegeneratePairingCode={store.regeneratePairingCode}
+          onOpenLearnerPair={() => openSetup('learner')}
+          onOpenParentRegistration={() => openSetup('parent')}
           onAddChild={store.addChildProfile}
           onActivateHandOff={store.activateHandOffMode}
           onRequestApprovalPin={(approval) =>
@@ -100,6 +113,7 @@ export default function App() {
           child={store.selectedChild}
           childrenList={store.children}
           handOffActive={store.handOffActive}
+          parentPin={store.parentAccount.pin}
           assignments={store.assignments}
           onSelectChild={store.setSelectedChildId}
           onSimulateTimeExpired={store.simulateTimeExpired}
@@ -107,6 +121,7 @@ export default function App() {
           onOpenExitHandOff={() =>
             setPinIntent({ kind: 'exit_handoff', targetRole: 'parent' })
           }
+          onOpenPairSetup={() => openSetup('learner')}
           onSelectActiveApp={store.selectActiveApp}
           onCompleteLesson={store.completeLesson}
         />
@@ -125,9 +140,23 @@ export default function App() {
         open={pinModalConfig.open}
         title={pinModalConfig.title}
         subtitle={pinModalConfig.subtitle}
+        expectedPin={store.parentAccount.pin}
         confirmLabel={pinModalConfig.confirmLabel}
         onSuccess={handlePinSuccess}
         onCancel={() => setPinIntent(null)}
+      />
+
+      <SetupOnboardingModal
+        key={`${setupOpen}-${setupInitialTab}`}
+        open={setupOpen}
+        initialTab={setupInitialTab}
+        defaultParentName={store.parentAccount.name}
+        defaultParentContact={store.parentAccount.contact}
+        defaultParentPin={store.parentAccount.pin}
+        childrenList={store.children}
+        onRegisterParentAndChild={store.registerParentAndChild}
+        onPairLearnerCode={store.pairLearnerByCode}
+        onClose={() => setSetupOpen(false)}
       />
     </div>
   );

@@ -34,10 +34,20 @@ data class LessonCompletionResult(
     val cappedOut: Boolean
 )
 
+data class PairingResult(
+    val success: Boolean,
+    val child: ChildProfile? = null,
+    val message: String
+)
+
 data class SomaTimeUiState(
     val roleView: RoleView = RoleView.PARENT,
     val selectedChildId: String = "amina",
     val handOffActive: Boolean = false,
+    val parentName: String = "Grace Wanjiku",
+    val parentContact: String = "0712 345 678",
+    val parentPin: String = CbcCurriculumRepository.PARENT_PIN,
+    val showSetupWizard: Boolean = false,
     val guardServiceRunning: Boolean = false,
     val lastDetectedForegroundApp: String? = null,
     val children: List<ChildProfile> = CbcCurriculumRepository.initialChildren(),
@@ -69,8 +79,14 @@ class SomaTimeStore private constructor(context: Context) {
             runCatching { RoleView.valueOf(it) }.getOrNull()
         } ?: base.roleView
         val handOff = prefs.getBoolean("hand_off_active", false)
+        val parentName = prefs.getString("parent_name", base.parentName) ?: base.parentName
+        val parentContact = prefs.getString("parent_contact", base.parentContact) ?: base.parentContact
+        val parentPin = prefs.getString("parent_pin", base.parentPin) ?: base.parentPin
 
-        val restoredChildren = base.children.map { child ->
+        val customIds = prefs.getStringSet("custom_child_ids", emptySet()) ?: emptySet()
+        val baseIds = base.children.map { it.id }.toSet()
+
+        val restoredBase = base.children.map { child ->
             val prefix = "child_${child.id}_"
             if (!prefs.contains("${prefix}secs")) return@map child
             child.copy(
@@ -80,25 +96,77 @@ class SomaTimeStore private constructor(context: Context) {
                 dailyCapMins = prefs.getInt("${prefix}cap", child.dailyCapMins),
                 exchangeRateMins = prefs.getInt("${prefix}rate", child.exchangeRateMins),
                 requireParentApproval = prefs.getBoolean("${prefix}approval", child.requireParentApproval),
-                isLocked = prefs.getBoolean("${prefix}locked", child.isLocked)
+                isLocked = prefs.getBoolean("${prefix}locked", child.isLocked),
+                isPaired = prefs.getBoolean("${prefix}paired", child.isPaired),
+                pairingCode = prefs.getString("${prefix}code", child.pairingCode) ?: child.pairingCode
             )
         }
+
+        val restoredCustom = customIds.filter { it !in baseIds }.mapNotNull { id ->
+            val prefix = "child_${id}_"
+            val name = prefs.getString("${prefix}name", null) ?: return@mapNotNull null
+            val grade = prefs.getInt("${prefix}grade", 5)
+            val school = prefs.getString("${prefix}school", "Nairobi Primary School") ?: "Nairobi Primary School"
+            val mandatory = if (grade >= 7) {
+                listOf(LearningArea.MATHEMATICS, LearningArea.INTEGRATED_SCIENCE)
+            } else {
+                listOf(LearningArea.MATHEMATICS, LearningArea.KISWAHILI)
+            }
+            ChildProfile(
+                id = id,
+                name = name,
+                grade = grade,
+                school = school,
+                classStream = "Grade $grade East",
+                deviceMode = DeviceMode.OWN_PHONE,
+                pairingCode = prefs.getString("${prefix}code", CbcCurriculumRepository.generatePairingCode())
+                    ?: CbcCurriculumRepository.generatePairingCode(),
+                isPaired = prefs.getBoolean("${prefix}paired", false),
+                dailyCapMins = prefs.getInt("${prefix}cap", 90),
+                exchangeRateMins = prefs.getInt("${prefix}rate", 15),
+                mandatorySubjects = mandatory,
+                requireParentApproval = prefs.getBoolean("${prefix}approval", false),
+                availableScreenSeconds = prefs.getInt("${prefix}secs", 300),
+                usedScreenTodayMins = prefs.getInt("${prefix}used", 0),
+                learnedMinutesToday = prefs.getInt("${prefix}learned", 0),
+                isLocked = prefs.getBoolean("${prefix}locked", false),
+                completedLessonIds = emptyList(),
+                pendingApprovals = emptyList(),
+                activityLogs = emptyList(),
+                rubricByArea = mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
+                streakDays = 1
+            )
+        }
+
+        val allChildren = restoredCustom + restoredBase
 
         return base.copy(
             roleView = savedRole,
             selectedChildId = savedChildId,
             handOffActive = handOff,
-            children = restoredChildren
+            parentName = parentName,
+            parentContact = parentContact,
+            parentPin = parentPin,
+            children = allChildren
         )
     }
 
     private fun persistState(s: SomaTimeUiState) {
         val editor = prefs.edit()
+        val defaultIds = setOf("amina", "brian")
+        val customIds = s.children.map { it.id }.filter { it !in defaultIds }.toSet()
+        editor.putStringSet("custom_child_ids", customIds)
         editor.putString("selected_child_id", s.selectedChildId)
         editor.putString("role_view", s.roleView.name)
         editor.putBoolean("hand_off_active", s.handOffActive)
+        editor.putString("parent_name", s.parentName)
+        editor.putString("parent_contact", s.parentContact)
+        editor.putString("parent_pin", s.parentPin)
         s.children.forEach { c ->
             val prefix = "child_${c.id}_"
+            editor.putString("${prefix}name", c.name)
+            editor.putInt("${prefix}grade", c.grade)
+            editor.putString("${prefix}school", c.school)
             editor.putInt("${prefix}secs", c.availableScreenSeconds)
             editor.putInt("${prefix}used", c.usedScreenTodayMins)
             editor.putInt("${prefix}learned", c.learnedMinutesToday)
@@ -106,6 +174,8 @@ class SomaTimeStore private constructor(context: Context) {
             editor.putInt("${prefix}rate", c.exchangeRateMins)
             editor.putBoolean("${prefix}approval", c.requireParentApproval)
             editor.putBoolean("${prefix}locked", c.isLocked)
+            editor.putBoolean("${prefix}paired", c.isPaired)
+            editor.putString("${prefix}code", c.pairingCode)
         }
         editor.apply()
     }
@@ -142,6 +212,10 @@ class SomaTimeStore private constructor(context: Context) {
         }
     }
 
+    fun setShowSetupWizard(show: Boolean) {
+        _state.update { it.copy(showSetupWizard = show) }
+    }
+
     fun setRoleView(role: RoleView) {
         _state.update { it.copy(roleView = role).also(::persistState) }
     }
@@ -157,6 +231,101 @@ class SomaTimeStore private constructor(context: Context) {
         }
     }
 
+    fun regeneratePairingCode(childId: String): String {
+        val code = CbcCurriculumRepository.generatePairingCode()
+        updateChild(childId) { it.copy(pairingCode = code) }
+        return code
+    }
+
+    fun registerParentAndChild(
+        parentName: String,
+        parentContact: String,
+        parentPin: String,
+        childName: String,
+        childGrade: Int,
+        childSchool: String,
+        dailyCapMins: Int,
+        initialWatchMins: Int
+    ): ChildProfile {
+        val id = "child-${System.currentTimeMillis()}"
+        val mandatory = if (childGrade >= 7) {
+            listOf(LearningArea.MATHEMATICS, LearningArea.INTEGRATED_SCIENCE)
+        } else {
+            listOf(LearningArea.MATHEMATICS, LearningArea.KISWAHILI)
+        }
+        val code = CbcCurriculumRepository.generatePairingCode()
+        val created = ChildProfile(
+            id = id,
+            name = childName.trim(),
+            grade = childGrade,
+            school = childSchool.trim().ifEmpty { "Nairobi Primary School" },
+            classStream = "Grade $childGrade East",
+            deviceMode = DeviceMode.OWN_PHONE,
+            pairingCode = code,
+            isPaired = false,
+            dailyCapMins = dailyCapMins,
+            exchangeRateMins = 15,
+            mandatorySubjects = mandatory,
+            requireParentApproval = false,
+            availableScreenSeconds = initialWatchMins * 60,
+            usedScreenTodayMins = 0,
+            learnedMinutesToday = 0,
+            isLocked = initialWatchMins <= 0,
+            completedLessonIds = emptyList(),
+            pendingApprovals = emptyList(),
+            activityLogs = emptyList(),
+            rubricByArea = mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
+            streakDays = 1
+        )
+        _state.update { current ->
+            current.copy(
+                parentName = parentName.trim().ifEmpty { current.parentName },
+                parentContact = parentContact.trim().ifEmpty { current.parentContact },
+                parentPin = if (parentPin.length == 4) parentPin else current.parentPin,
+                selectedChildId = id,
+                roleView = RoleView.PARENT,
+                children = listOf(created) + current.children
+            ).also(::persistState)
+        }
+        return created
+    }
+
+    fun pairLearnerByCode(rawCode: String): PairingResult {
+        val normalized = rawCode.trim().uppercase(Locale.US)
+        if (normalized.isEmpty()) {
+            return PairingResult(false, message = "Enter the pairing code generated on your parent's phone.")
+        }
+        val matched = _state.value.children.firstOrNull {
+            it.pairingCode.uppercase(Locale.US) == normalized
+        } ?: return PairingResult(
+            false,
+            message = "No child profile matches code \"$normalized\"."
+        )
+
+        _state.update { current ->
+            val updated = current.children.map { c ->
+                if (c.id == matched.id) {
+                    c.copy(deviceMode = DeviceMode.OWN_PHONE, isPaired = true)
+                } else {
+                    c
+                }
+            }
+            current.copy(
+                roleView = RoleView.CHILD,
+                selectedChildId = matched.id,
+                handOffActive = true,
+                showSetupWizard = false,
+                children = updated
+            ).also(::persistState)
+        }
+
+        return PairingResult(
+            success = true,
+            child = matched,
+            message = "Paired with ${matched.name}! Background watch-minute guard active."
+        )
+    }
+
     fun addChild(name: String, grade: Int, school: String) {
         val id = "child-${System.currentTimeMillis()}"
         val mandatory = if (grade >= 7) {
@@ -170,15 +339,17 @@ class SomaTimeStore private constructor(context: Context) {
             grade = grade,
             school = school.trim().ifEmpty { "Nairobi Primary School" },
             classStream = "Grade $grade East",
-            deviceMode = DeviceMode.HAND_OFF,
+            deviceMode = DeviceMode.OWN_PHONE,
+            pairingCode = CbcCurriculumRepository.generatePairingCode(),
+            isPaired = false,
             dailyCapMins = 90,
             exchangeRateMins = 15,
             mandatorySubjects = mandatory,
             requireParentApproval = false,
-            availableScreenSeconds = 0,
+            availableScreenSeconds = 180,
             usedScreenTodayMins = 0,
             learnedMinutesToday = 0,
-            isLocked = true,
+            isLocked = false,
             completedLessonIds = emptyList(),
             pendingApprovals = emptyList(),
             activityLogs = emptyList(),
@@ -382,7 +553,7 @@ class SomaTimeStore private constructor(context: Context) {
     }
 
     companion object {
-        private const val PREFS_NAME = "somatime_prefs_v1"
+        private const val PREFS_NAME = "somatime_prefs_v2"
 
         @Volatile
         private var instance: SomaTimeStore? = null

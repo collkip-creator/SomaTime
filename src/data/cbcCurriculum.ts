@@ -535,6 +535,11 @@ export const CBC_DIRECTORY_CATALOG: Array<{
   { grade: 12, levelGroup: 'Senior School', pathway: 'Arts & Sports Science', learningArea: 'Creative Arts', strand: 'Digital Media & Design', subStrand: 'Kenyan Cultural Visual Storytelling', linkedLessonId: 'g1-eng-reading' },
 ];
 
+export function generatePairingCode(): string {
+  const digits = Math.floor(1000 + Math.random() * 9000);
+  return `SOMA-${digits}`;
+}
+
 export const INITIAL_CHILDREN: ChildProfile[] = [
   {
     id: 'amina',
@@ -544,6 +549,9 @@ export const INITIAL_CHILDREN: ChildProfile[] = [
     classStream: 'Grade 4 West - Nairobi Primary',
     avatarUrl: ASSETS.aminaAvatar,
     deviceMode: 'hand_off',
+    pairingCode: 'SOMA-4012',
+    isPaired: false,
+    backgroundGuardActive: false,
     dailyCapMins: 90,
     exchangeRateMins: 15,
     mandatorySubjects: ['Mathematics', 'Kiswahili'],
@@ -586,6 +594,9 @@ export const INITIAL_CHILDREN: ChildProfile[] = [
     classStream: 'Grade 8 North - Kilimani Junior',
     avatarUrl: ASSETS.brianAvatar,
     deviceMode: 'own_phone',
+    pairingCode: 'SOMA-8009',
+    isPaired: true,
+    backgroundGuardActive: true,
     dailyCapMins: 120,
     exchangeRateMins: 15,
     mandatorySubjects: ['Mathematics', 'Integrated Science'],

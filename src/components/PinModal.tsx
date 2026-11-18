@@ -6,6 +6,7 @@ interface PinModalProps {
   open: boolean;
   title: string;
   subtitle: string;
+  expectedPin?: string;
   confirmLabel?: string;
   onSuccess: () => void;
   onCancel: () => void;
@@ -15,6 +16,7 @@ export function PinModal({
   open,
   title,
   subtitle,
+  expectedPin = PARENT_PIN,
   confirmLabel = 'Verify PIN',
   onSuccess,
   onCancel,
@@ -37,10 +39,10 @@ export function PinModal({
     setPin(next);
     setError('');
     if (next.length === 4) {
-      if (next === PARENT_PIN) {
+      if (next === expectedPin) {
         onSuccess();
       } else {
-        setError('Incorrect Parent PIN. Demo PIN is 1234.');
+        setError(`Incorrect Parent PIN. Active PIN is ${expectedPin}.`);
         window.setTimeout(() => setPin(''), 350);
       }
     }
@@ -53,10 +55,10 @@ export function PinModal({
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin === PARENT_PIN) {
+    if (pin === expectedPin) {
       onSuccess();
     } else {
-      setError('Incorrect Parent PIN. Demo PIN is 1234.');
+      setError(`Incorrect Parent PIN. Active PIN is ${expectedPin}.`);
       setPin('');
     }
   };
@@ -111,7 +113,7 @@ export function PinModal({
           </div>
 
           <p className="mt-2.5 text-center text-xs text-slate-500">
-            Demo Parent PIN: <span className="font-mono font-semibold text-slate-800">1234</span>
+            Active Parent PIN: <span className="font-mono font-semibold text-slate-800">{expectedPin}</span>
           </p>
 
           {error && (

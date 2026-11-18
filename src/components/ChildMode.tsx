@@ -39,11 +39,13 @@ interface ChildModeProps {
   child: ChildProfile;
   childrenList: ChildProfile[];
   handOffActive: boolean;
+  parentPin: string;
   assignments: TeacherAssignment[];
   onSelectChild: (id: string) => void;
   onSimulateTimeExpired: (id: string) => void;
   onOpenPinUnlock: () => void;
   onOpenExitHandOff: () => void;
+  onOpenPairSetup: () => void;
   onSelectActiveApp: (id: string, appName: string | null) => void;
   onCompleteLesson: (
     childId: string,
@@ -68,11 +70,13 @@ export function ChildMode({
   child,
   childrenList,
   handOffActive,
+  parentPin,
   assignments,
   onSelectChild,
   onSimulateTimeExpired,
   onOpenPinUnlock,
   onOpenExitHandOff,
+  onOpenPairSetup,
   onSelectActiveApp,
   onCompleteLesson,
 }: ChildModeProps) {
@@ -190,14 +194,25 @@ export function ChildMode({
               </span>
             </div>
             <p className="text-xs text-slate-600">
-              {handOffActive
-                ? 'Hand-Off Mode active on Parent Phone · PIN 1234 required to exit'
-                : `${child.school} · Exchange Rate: 1 CBC Lesson = +${child.exchangeRateMins} mins`}
+              {child.isPaired
+                ? `Paired (${child.pairingCode}) · Background watch-minute guard active · Parent PIN ${parentPin} to interrupt`
+                : handOffActive
+                  ? `Hand-Off Mode active on Parent Phone · PIN ${parentPin} required to exit`
+                  : `${child.school} · Not paired yet (Code: ${child.pairingCode})`}
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {!child.isPaired && (
+            <button
+              type="button"
+              onClick={onOpenPairSetup}
+              className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+            >
+              <span>Register as Learner (Enter Code)</span>
+            </button>
+          )}
           {!handOffActive && childrenList.length > 1 && (
             <select
               aria-label="Switch active child preview"

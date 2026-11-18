@@ -2,8 +2,10 @@ import { useState } from 'react';
 import {
   CheckCircle2,
   Clock,
+  Link2,
   Lock,
   Plus,
+  RefreshCw,
   ShieldAlert,
   Smartphone,
   TabletSmartphone,
@@ -22,8 +24,12 @@ import type { ChildProfile, DeviceMode, LearningArea, PendingApproval } from '..
 interface ParentDashboardProps {
   childrenList: ChildProfile[];
   selectedChild: ChildProfile;
+  parentPin: string;
   onSelectChild: (id: string) => void;
   onUpdateChild: (id: string, patch: Partial<ChildProfile>) => void;
+  onRegeneratePairingCode: (id: string) => void;
+  onOpenLearnerPair: () => void;
+  onOpenParentRegistration: () => void;
   onAddChild: (input: { name: string; grade: number; school: string }) => void;
   onActivateHandOff: (id: string) => void;
   onRequestApprovalPin: (approval: PendingApproval) => void;
@@ -33,8 +39,12 @@ interface ParentDashboardProps {
 export function ParentDashboard({
   childrenList,
   selectedChild,
+  parentPin,
   onSelectChild,
   onUpdateChild,
+  onRegeneratePairingCode,
+  onOpenLearnerPair,
+  onOpenParentRegistration,
   onAddChild,
   onActivateHandOff,
   onRequestApprovalPin,
@@ -220,9 +230,9 @@ export function ParentDashboard({
         </div>
       </section>
 
-      {/* Hand-Off Mode & Device Mode Hero Bar */}
+      {/* Hand-Off Mode & Child Phone Pairing Card */}
       <section
-        aria-label="Device hand-off and lock controls"
+        aria-label="Device hand-off and pairing controls"
         className="mt-6 rounded-3xl border border-slate-200 bg-white p-5 sm:p-6"
       >
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
@@ -231,11 +241,12 @@ export function ParentDashboard({
               Active Device Policy · {selectedChild.name} (Grade {selectedChild.grade})
             </p>
             <h2 className="font-display text-xl font-bold text-slate-900">
-              Device Mode & Immediate Hand-Off Lock
+              Device Mode, Child Phone Pairing &amp; Hand-Off Lock
             </h2>
             <p className="max-w-2xl text-sm text-slate-600">
-              Choose whether {selectedChild.name.split(' ')[0]} uses their own synced Android phone
-              or borrows your phone in locked Hand-Off Mode (PIN <span className="font-mono font-semibold text-slate-900">1234</span> required to exit).
+              Generate a pairing code for {selectedChild.name.split(' ')[0]}&apos;s own phone, or use
+              locked Hand-Off Mode on your phone (Parent PIN{' '}
+              <span className="font-mono font-semibold text-slate-900">{parentPin}</span> required to exit).
             </p>
 
             <div className="flex flex-wrap gap-2 pt-1">
@@ -276,8 +287,52 @@ export function ParentDashboard({
               <span>Activate Child Lock &amp; Hand Over Phone</span>
             </button>
             <span className="text-center text-xs text-slate-500 lg:text-right">
-              Switches to locked Child Mode · Requires PIN 1234 to exit
+              Switches to locked Child Mode · Requires PIN {parentPin} to exit
             </span>
+          </div>
+        </div>
+
+        {/* Child Phone Pairing Code Strip */}
+        <div className="mt-5 flex flex-col gap-4 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-bold text-slate-800">
+              Child Phone Pairing Code for {selectedChild.name}
+            </p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-3">
+              <span className="rounded-xl border border-teal-200 bg-teal-50 px-3.5 py-1.5 font-mono text-lg font-extrabold tracking-wider text-teal-900">
+                {selectedChild.pairingCode}
+              </span>
+              <span className="text-xs font-semibold text-slate-600">
+                {selectedChild.isPaired
+                  ? 'Paired · Background watch-minute guard active'
+                  : 'Not yet paired · Enter this code on learner phone'}
+              </span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onRegeneratePairingCode(selectedChild.id)}
+              className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Generate New Code</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenLearnerPair}
+              className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              <span>Pair Learner Phone</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenParentRegistration}
+              className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              <span>Parent Setup Wizard</span>
+            </button>
           </div>
         </div>
       </section>

@@ -2,5 +2,7 @@
   "name": "SomaTime",
   "description": "Kenyan CBC Parental Control & EdTech platform connecting smartphone screen time to interactive competency-based learning.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

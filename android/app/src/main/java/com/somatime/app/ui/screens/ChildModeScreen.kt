@@ -65,6 +65,7 @@ fun ChildModeScreen(
     onSimulateTimeExpired: (String) -> Unit,
     onOpenPinUnlock: () -> Unit,
     onOpenExitHandOff: () -> Unit,
+    onOpenSetupWizard: () -> Unit,
     onCompleteLesson: (String, CBCLesson, Int) -> LessonCompletionResult
 ) {
     val child = uiState.selectedChild
@@ -126,12 +127,28 @@ fun ChildModeScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF475569)
                     )
+                    Text(
+                        if (child.isPaired) {
+                            "Paired (${child.pairingCode}) · Background watch-minute guard active"
+                        } else {
+                            "Unpaired device · Tap Register as Learner to enter parent code"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (child.isPaired) SomaEmerald else Color(0xFF64748B),
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
-                if (uiState.handOffActive) {
+                if (uiState.handOffActive || child.isPaired) {
                     OutlinedButton(onClick = onOpenExitHandOff) {
                         Icon(Icons.Rounded.Key, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Exit")
+                    }
+                } else {
+                    OutlinedButton(onClick = onOpenSetupWizard) {
+                        Icon(Icons.Rounded.Key, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Pair")
                     }
                 }
             }
@@ -187,9 +204,9 @@ fun ChildModeScreen(
 
                     Text(
                         if (isLocked) {
-                            "YouTube, TikTok & Games are locked. Complete one 5-minute Kenyan CBC activity to earn +${child.exchangeRateMins} mins."
+                            "Uninterruptible screen takeover active. YouTube, TikTok & Games are blocked until you complete one 5-minute Kenyan CBC activity or a parent enters PIN (${uiState.parentPin})."
                         } else {
-                            "Daily usage: ${child.usedScreenTodayMins}/${child.dailyCapMins} mins · SomaTime Guard monitoring."
+                            "Daily usage: ${child.usedScreenTodayMins}/${child.dailyCapMins} mins · Background watch-minute guard checking."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFE2E8F0)
@@ -224,7 +241,7 @@ fun ChildModeScreen(
                         } else {
                             Button(
                                 onClick = { onSimulateTimeExpired(child.id) },
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = SomaAmber,
                                     contentColor = Color(0xFF0F172A)
@@ -233,6 +250,14 @@ fun ChildModeScreen(
                                 Icon(Icons.Rounded.Timer, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Simulate Time Expired (00:00)")
+                            }
+                            if (!child.isPaired) {
+                                OutlinedButton(
+                                    onClick = onOpenSetupWizard,
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                                ) {
+                                    Text("Pair Code")
+                                }
                             }
                         }
                     }

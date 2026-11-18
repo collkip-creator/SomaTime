@@ -17,7 +17,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -70,6 +72,8 @@ fun ParentDashboardScreen(
     onSetDeviceMode: (String, DeviceMode) -> Unit,
     onActivateHandOff: (String) -> Unit,
     onAddChild: (String, Int, String) -> Unit,
+    onRegeneratePairingCode: (String) -> Unit,
+    onOpenSetupWizard: () -> Unit,
     onRequestApprovalPin: (PendingApproval) -> Unit,
     onDeclineApproval: (String, String) -> Unit
 ) {
@@ -105,10 +109,17 @@ fun ParentDashboardScreen(
                         color = Color(0xFF475569)
                     )
                 }
-                OutlinedButton(onClick = { showAddDialog = true }) {
-                    Icon(Icons.Rounded.Add, contentDescription = null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Add Child")
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = onOpenSetupWizard) {
+                        Icon(Icons.Rounded.Key, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Setup")
+                    }
+                    OutlinedButton(onClick = { showAddDialog = true }) {
+                        Icon(Icons.Rounded.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Child")
+                    }
                 }
             }
         }
@@ -244,10 +255,58 @@ fun ParentDashboardScreen(
                         Text("Activate Child Lock & Hand Over Phone")
                     }
                     Text(
-                        "Locks immediately into Child Mode. Parent PIN 1234 required to exit.",
+                        "Locks immediately into Child Mode. Parent PIN ${uiState.parentPin} required to exit.",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFF64748B)
                     )
+
+                    HorizontalDivider()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Child Phone Pairing Code",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                if (child.isPaired) {
+                                    "Paired · Background watch-minute guard active"
+                                } else {
+                                    "Not paired yet · Enter this code on child's phone"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (child.isPaired) SomaEmerald else Color(0xFF64748B)
+                            )
+                        }
+                        Text(
+                            text = child.pairingCode,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = SomaTeal
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { onRegeneratePairingCode(child.id) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New Code")
+                        }
+                        OutlinedButton(
+                            onClick = onOpenSetupWizard,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Pair Learner")
+                        }
+                    }
                 }
             }
         }

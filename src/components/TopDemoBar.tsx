@@ -1,4 +1,4 @@
-import { GraduationCap, Lock, RotateCcw, ShieldCheck, Smartphone } from 'lucide-react';
+import { GraduationCap, Link2, Lock, RotateCcw, ShieldCheck, Smartphone } from 'lucide-react';
 import type { ChildProfile, RoleView } from '../types/somatime';
 
 interface TopDemoBarProps {
@@ -6,6 +6,7 @@ interface TopDemoBarProps {
   handOffActive: boolean;
   selectedChild: ChildProfile;
   onSelectRole: (role: RoleView) => void;
+  onOpenSetup: () => void;
   onResetDemo: () => void;
 }
 
@@ -14,6 +15,7 @@ export function TopDemoBar({
   handOffActive,
   selectedChild,
   onSelectRole,
+  onOpenSetup,
   onResetDemo,
 }: TopDemoBarProps) {
   const roles: Array<{
@@ -29,7 +31,7 @@ export function TopDemoBar({
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-md">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2.5 sm:px-6">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
         <div className="flex items-center gap-2.5 shrink-0">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-700 font-display text-base font-extrabold text-white">
             S
@@ -70,11 +72,20 @@ export function TopDemoBar({
           })}
         </nav>
 
-        <div className="flex items-center gap-3 shrink-0">
-          <span className="hidden text-xs text-slate-600 lg:inline whitespace-nowrap">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="hidden text-xs text-slate-600 xl:inline whitespace-nowrap">
             Active: <strong className="font-semibold text-slate-900">{selectedChild.name}</strong> · Grade{' '}
             {selectedChild.grade}
           </span>
+          <button
+            type="button"
+            onClick={onOpenSetup}
+            className="flex min-h-[38px] items-center gap-1.5 rounded-xl bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-teal-800 whitespace-nowrap shrink-0"
+          >
+            <Link2 className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Setup &amp; Pair</span>
+            <span className="sm:hidden">Pair</span>
+          </button>
           <button
             type="button"
             onClick={onResetDemo}
@@ -82,7 +93,7 @@ export function TopDemoBar({
             className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 hover:text-slate-900 whitespace-nowrap shrink-0"
           >
             <RotateCcw className="h-3.5 w-3.5" />
-            <span className="hidden md:inline">Reset Demo</span>
+            <span className="hidden md:inline">Reset</span>
           </button>
         </div>
       </div>

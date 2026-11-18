@@ -41,6 +41,13 @@ export interface ChildActivityLog {
   timestamp: string;
 }
 
+export interface ParentAccount {
+  name: string;
+  contact: string;
+  pin: string;
+  registered: boolean;
+}
+
 export interface ChildProfile {
   id: string;
   name: string;
@@ -49,6 +56,9 @@ export interface ChildProfile {
   classStream: string;
   avatarUrl: string;
   deviceMode: DeviceMode;
+  pairingCode: string;
+  isPaired: boolean;
+  backgroundGuardActive: boolean;
   dailyCapMins: number;
   exchangeRateMins: number;
   mandatorySubjects: LearningArea[];

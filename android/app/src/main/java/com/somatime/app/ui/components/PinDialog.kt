@@ -41,6 +41,7 @@ import com.somatime.app.ui.theme.SomaTeal
 fun PinDialog(
     title: String,
     subtitle: String,
+    expectedPin: String = CbcCurriculumRepository.PARENT_PIN,
     confirmLabel: String = "Verify PIN",
     onSuccess: () -> Unit,
     onDismiss: () -> Unit
@@ -54,10 +55,10 @@ fun PinDialog(
         pin = next
         error = ""
         if (next.length == 4) {
-            if (next == CbcCurriculumRepository.PARENT_PIN) {
+            if (next == expectedPin) {
                 onSuccess()
             } else {
-                error = "Incorrect Parent PIN. Demo PIN is 1234."
+                error = "Incorrect Parent PIN. Active PIN is $expectedPin."
                 pin = ""
             }
         }
@@ -109,7 +110,7 @@ fun PinDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Demo Parent PIN: 1234",
+                    text = "Active Parent PIN: $expectedPin",
                     style = MaterialTheme.typography.labelMedium,
                     color = Color(0xFF64748B),
                     textAlign = TextAlign.Center
@@ -195,10 +196,10 @@ fun PinDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (pin == CbcCurriculumRepository.PARENT_PIN) {
+                    if (pin == expectedPin) {
                         onSuccess()
                     } else {
-                        error = "Incorrect Parent PIN. Demo PIN is 1234."
+                        error = "Incorrect Parent PIN. Active PIN is $expectedPin."
                         pin = ""
                     }
                 },

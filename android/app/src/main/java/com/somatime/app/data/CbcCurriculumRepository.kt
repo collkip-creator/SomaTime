@@ -274,6 +274,11 @@ object CbcCurriculumRepository {
         "Grade 8 North - Kilimani Junior"
     )
 
+    fun generatePairingCode(): String {
+        val num = (1000..9999).random()
+        return "SOMA-$num"
+    }
+
     fun initialChildren(): List<ChildProfile> = listOf(
         ChildProfile(
             id = "amina",
@@ -282,6 +287,8 @@ object CbcCurriculumRepository {
             school = "Nairobi Primary School",
             classStream = "Grade 4 West - Nairobi Primary",
             deviceMode = DeviceMode.HAND_OFF,
+            pairingCode = "SOMA-4012",
+            isPaired = false,
             dailyCapMins = 90,
             exchangeRateMins = 15,
             mandatorySubjects = listOf(LearningArea.MATHEMATICS, LearningArea.KISWAHILI),
@@ -320,6 +327,8 @@ object CbcCurriculumRepository {
             school = "Kilimani Junior School",
             classStream = "Grade 8 North - Kilimani Junior",
             deviceMode = DeviceMode.OWN_PHONE,
+            pairingCode = "SOMA-8009",
+            isPaired = true,
             dailyCapMins = 120,
             exchangeRateMins = 15,
             mandatorySubjects = listOf(LearningArea.MATHEMATICS, LearningArea.INTEGRATED_SCIENCE),
