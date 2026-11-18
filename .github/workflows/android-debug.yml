@@ -5,13 +5,15 @@ on:
   push:
     branches:
       - main
+      - master
   pull_request:
     branches:
       - main
+      - master
 
 jobs:
   build:
-    name: Assemble Debug APK
+    name: Assemble SomaTime Debug APK
     runs-on: ubuntu-latest
 
     steps:
@@ -26,16 +28,16 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-
-      - name: Grant execute permission for Gradle wrapper
-        run: chmod +x ./gradlew
+        with:
+          gradle-version: '8.9'
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        working-directory: android
+        run: gradle assembleDebug --stacktrace
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: somatime-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

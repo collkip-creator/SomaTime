@@ -1,0 +1,1 @@
+# SomaTime release ProGuard rules
