@@ -38,6 +38,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,8 +48,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.somatime.app.data.CbcCurriculumRepository
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.data.SomaTimeUiState
@@ -73,16 +77,33 @@ fun ParentDashboardScreen(
     onActivateHandOff: (String) -> Unit,
     onAddChild: (String, Int, String) -> Unit,
     onRegeneratePairingCode: (String) -> Unit,
+    onRetryCloudSync: () -> Unit,
     onOpenSetupWizard: () -> Unit,
     onRequestApprovalPin: (PendingApproval) -> Unit,
     onDeclineApproval: (String, String) -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val child = uiState.selectedChild
     var showAddDialog by remember { mutableStateOf(false) }
 
-    val hasUsageStats = UsageAccessHelper.hasUsageStatsPermission(context)
-    val hasOverlay = UsageAccessHelper.canDrawOverlays(context)
+    var hasUsageStats by remember { mutableStateOf(UsageAccessHelper.hasUsageStatsPermission(context)) }
+    var hasOverlay by remember { mutableStateOf(UsageAccessHelper.canDrawOverlays(context)) }
+    var hasAccessibility by remember { mutableStateOf(UsageAccessHelper.isAccessibilityServiceEnabled(context)) }
+    var hasDeviceAdmin by remember { mutableStateOf(UsageAccessHelper.isDeviceAdminActive(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasUsageStats = UsageAccessHelper.hasUsageStatsPermission(context)
+                hasOverlay = UsageAccessHelper.canDrawOverlays(context)
+                hasAccessibility = UsageAccessHelper.isAccessibilityServiceEnabled(context)
+                hasDeviceAdmin = UsageAccessHelper.isDeviceAdminActive(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -168,7 +189,7 @@ fun ParentDashboardScreen(
                         )
                     }
                     Text(
-                        "Grant Usage Access and Overlay permissions on your Android phone so SomaTime can monitor YouTube/TikTok/Games and lock when time hits 00:00.",
+                        "Enable all 4 protections on the child's phone so SomaTime blocks YouTube/TikTok, disables swiping down notifications, blocks Home/Recents/Settings, and prevents uninstall.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF475569)
                     )
@@ -177,13 +198,27 @@ fun ParentDashboardScreen(
                             onClick = { UsageAccessHelper.openUsageAccessSettings(context) },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(if (hasUsageStats) "Usage Access ✓" else "Grant Usage Access")
+                            Text(if (hasUsageStats) "Usage Access ✓" else "1. Usage Access")
                         }
                         OutlinedButton(
                             onClick = { UsageAccessHelper.openOverlaySettings(context) },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text(if (hasOverlay) "Overlay ✓" else "Allow Overlay")
+                            Text(if (hasOverlay) "Overlay ✓" else "2. Overlay")
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { UsageAccessHelper.openAccessibilitySettings(context) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (hasAccessibility) "Swipe/Btn Guard ✓" else "3. Lockdown Guard")
+                        }
+                        OutlinedButton(
+                            onClick = { UsageAccessHelper.openDeviceAdminSettings(context) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (hasDeviceAdmin) "Uninstall Lock ✓" else "4. Anti-Uninstall")
                         }
                     }
                     Button(
@@ -291,6 +326,13 @@ fun ParentDashboardScreen(
                         )
                     }
 
+                    Text(
+                        text = uiState.cloudSyncMessage,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (uiState.cloudSyncOk) SomaEmerald else Color(0xFFDC2626),
+                        fontWeight = FontWeight.SemiBold
+                    )
+
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = { onRegeneratePairingCode(child.id) },
@@ -301,11 +343,17 @@ fun ParentDashboardScreen(
                             Text("New Code")
                         }
                         OutlinedButton(
-                            onClick = onOpenSetupWizard,
+                            onClick = onRetryCloudSync,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Pair Learner")
+                            Text("Sync Cloud")
                         }
+                    }
+                    OutlinedButton(
+                        onClick = onOpenSetupWizard,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Setup & Pair Learner Wizard")
                     }
                 }
             }

@@ -92,6 +92,9 @@ export default function App() {
           childrenList={store.children}
           selectedChild={store.selectedChild}
           parentPin={store.parentAccount.pin}
+          cloudSyncOk={store.cloudSyncOk}
+          cloudSyncMessage={store.cloudSyncMessage}
+          onRetryCloudSync={() => void store.retryCloudSyncNow()}
           onSelectChild={store.setSelectedChildId}
           onUpdateChild={store.updateChildSettings}
           onRegeneratePairingCode={store.regeneratePairingCode}

@@ -27,11 +27,18 @@ class ScreenTimeGuardService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var monitorJob: Job? = null
+    private lateinit var overlayController: LockOverlayController
+
+    override fun onCreate() {
+        super.onCreate()
+        overlayController = LockOverlayController(this)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            overlayController.hideAll()
             SomaTimeStore.getInstance(this).setGuardServiceRunning(false)
             stopSelf()
             return START_NOT_STICKY
@@ -57,9 +64,9 @@ class ScreenTimeGuardService : Service() {
             var takeoverTriggered = false
             var tickCount = 0
             while (isActive) {
-                delay(1000L)
+                delay(350L)
                 tickCount += 1
-                if (tickCount % 5 == 0) {
+                if (tickCount % 14 == 0) {
                     runCatching { store.syncPairedChildWithCloud() }
                 }
 
@@ -71,16 +78,25 @@ class ScreenTimeGuardService : Service() {
                 }
 
                 val isLocked = child.isLocked || child.availableScreenSeconds <= 0
-                if (!isLocked) {
+                val isTakeoverEnforced = isLocked && (uiState.handOffActive || child.isPaired)
+
+                if (!isTakeoverEnforced) {
                     takeoverTriggered = false
+                    overlayController.hideAll()
+                    continue
                 }
 
-                val openingOtherApp = foregroundPkg != null && foregroundPkg != packageName
-                val shouldTakeOverNow = isLocked && (
-                    !takeoverTriggered ||
-                        (openingOtherApp && foregroundPkg in UsageAccessHelper.restrictedEntertainmentPackages)
-                )
+                // Keep top status-bar swipe-down blocker active while device is in locked takeover
+                overlayController.showTopSwipeBlocker()
 
+                val openingOtherApp = foregroundPkg != null && foregroundPkg != packageName
+                if (openingOtherApp) {
+                    overlayController.showFullLockOverlay()
+                } else {
+                    overlayController.hideFullLockOverlay()
+                }
+
+                val shouldTakeOverNow = !takeoverTriggered || openingOtherApp
                 if (shouldTakeOverNow) {
                     takeoverTriggered = true
                     val lockIntent = Intent(this@ScreenTimeGuardService, MainActivity::class.java).apply {
@@ -91,7 +107,7 @@ class ScreenTimeGuardService : Service() {
                         )
                         putExtra(EXTRA_INTERCEPTED_APP, foregroundPkg ?: "screen_timer_expired")
                     }
-                    startActivity(lockIntent)
+                    runCatching { startActivity(lockIntent) }
                 }
             }
         }
@@ -102,6 +118,9 @@ class ScreenTimeGuardService : Service() {
     override fun onDestroy() {
         monitorJob?.cancel()
         serviceScope.cancel()
+        if (::overlayController.isInitialized) {
+            overlayController.hideAll()
+        }
         SomaTimeStore.getInstance(this).setGuardServiceRunning(false)
         super.onDestroy()
     }

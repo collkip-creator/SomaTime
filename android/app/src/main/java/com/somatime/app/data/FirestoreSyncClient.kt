@@ -40,6 +40,13 @@ data class CloudPairingData(
     val completedLessonIds: List<String>
 )
 
+data class CloudOpResult<T>(
+    val ok: Boolean,
+    val data: T? = null,
+    val httpCode: Int = 0,
+    val errorMessage: String = ""
+)
+
 object FirestoreSyncClient {
 
     private const val PROJECT_ID = "gen-lang-client-0447196247"
@@ -50,24 +57,49 @@ object FirestoreSyncClient {
 
     private val PAIRING_CODE_REGEX = Regex("^SOMA-[A-Z0-9]{4,12}$")
 
-    fun normalizeCode(raw: String): String =
-        raw.trim().uppercase().replace(Regex("[^A-Z0-9-]"), "").take(24)
+    fun normalizeCode(raw: String): String {
+        val cleaned = raw.trim().uppercase(Locale.US).replace(Regex("[^A-Z0-9-\\s]"), "")
+        if (cleaned.isEmpty()) return ""
+        val collapsed = cleaned.replace(Regex("\\s+"), "-").replace(Regex("-+"), "-")
+        return when {
+            collapsed.startsWith("SOMA-") -> collapsed.take(24)
+            collapsed.startsWith("SOMA") && collapsed.length > 4 -> {
+                val rest = collapsed.substring(4).trimStart('-')
+                "SOMA-$rest".take(24)
+            }
+            Regex("^[A-Z0-9]{4,12}$").matches(collapsed) -> "SOMA-$collapsed".take(24)
+            else -> collapsed.take(24)
+        }
+    }
 
     fun isValidCode(code: String): Boolean = PAIRING_CODE_REGEX.matches(code)
 
-    suspend fun publishPairingSession(child: ChildProfile, parentPin: String): Boolean =
+    suspend fun publishPairingSession(child: ChildProfile, parentPin: String): CloudOpResult<Boolean> =
         withContext(Dispatchers.IO) {
             val code = normalizeCode(child.pairingCode)
-            if (!isValidCode(code)) return@withContext false
+            if (!isValidCode(code)) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Invalid pairing code format ($code)."
+                )
+            }
 
-            val existing = fetchPairingRaw(code)
+            val existingRes = fetchPairingRaw(code)
+            if (!existingRes.ok && existingRes.httpCode != 404) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = existingRes.httpCode,
+                    errorMessage = existingRes.errorMessage
+                )
+            }
+
+            val existing = existingRes.data
             val fields = buildFieldsJson(child, parentPin, includeImmutable = existing == null)
             val body = JSONObject().put("fields", fields).toString()
 
-            if (existing == null) {
+            val res = if (existing == null) {
                 val url = "$BASE_URL/pairings?documentId=${enc(code)}&key=${enc(API_KEY)}"
-                val res = request("POST", url, body, patchOverride = false)
-                res.code in 200..299
+                request("POST", url, body, patchOverride = false)
             } else {
                 val updateFields = listOf(
                     "childName", "grade", "school", "classStream", "deviceMode",
@@ -77,19 +109,39 @@ object FirestoreSyncClient {
                 )
                 val maskParams = updateFields.joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
                 val url = "$BASE_URL/pairings/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
-                val res = request("POST", url, body, patchOverride = true)
-                res.code in 200..299
+                request("POST", url, body, patchOverride = true)
+            }
+
+            if (res.code in 200..299) {
+                CloudOpResult(ok = true, data = true, httpCode = res.code)
+            } else {
+                CloudOpResult(
+                    ok = false,
+                    httpCode = res.code,
+                    errorMessage = formatHttpFailure(res)
+                )
             }
         }
 
-    suspend fun fetchAndPairSession(rawCode: String): CloudPairingData? =
+    suspend fun fetchAndPairSession(rawCode: String): CloudOpResult<CloudPairingData> =
         withContext(Dispatchers.IO) {
             val code = normalizeCode(rawCode)
-            if (!isValidCode(code)) return@withContext null
+            if (!isValidCode(code)) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Enter a valid code like SOMA-4012."
+                )
+            }
 
-            val parsed = fetchPairingRaw(code) ?: return@withContext null
+            val fetched = fetchPairingRaw(code)
+            if (!fetched.ok || fetched.data == null) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = fetched.httpCode,
+                    errorMessage = fetched.errorMessage
+                )
+            }
 
-            // Mark device as paired in Firestore so the Parent device sees it immediately
             val patchFields = JSONObject()
                 .put("isPaired", boolVal(true))
                 .put("deviceMode", strVal("own_phone"))
@@ -98,22 +150,35 @@ object FirestoreSyncClient {
             val maskParams = listOf("isPaired", "deviceMode", "updatedAt")
                 .joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
             val url = "$BASE_URL/pairings/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
-            request("POST", url, body, patchOverride = true)
+            val patchRes = request("POST", url, body, patchOverride = true)
+            if (patchRes.code !in 200..299) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = patchRes.code,
+                    errorMessage = formatHttpFailure(patchRes)
+                )
+            }
 
-            parsed.copy(isPaired = true, deviceMode = DeviceMode.OWN_PHONE)
+            CloudOpResult(
+                ok = true,
+                data = fetched.data.copy(isPaired = true, deviceMode = DeviceMode.OWN_PHONE),
+                httpCode = patchRes.code
+            )
         }
 
-    suspend fun fetchPairingSession(rawCode: String): CloudPairingData? =
+    suspend fun fetchPairingSession(rawCode: String): CloudOpResult<CloudPairingData> =
         withContext(Dispatchers.IO) {
             val code = normalizeCode(rawCode)
-            if (!isValidCode(code)) return@withContext null
+            if (!isValidCode(code)) {
+                return@withContext CloudOpResult(ok = false, errorMessage = "Invalid code")
+            }
             fetchPairingRaw(code)
         }
 
-    suspend fun patchLearnerSync(child: ChildProfile): Boolean =
+    suspend fun patchLearnerSync(child: ChildProfile): CloudOpResult<Boolean> =
         withContext(Dispatchers.IO) {
             val code = normalizeCode(child.pairingCode)
-            if (!isValidCode(code)) return@withContext false
+            if (!isValidCode(code)) return@withContext CloudOpResult(ok = false, errorMessage = "Invalid code")
 
             val fields = JSONObject()
                 .put("isPaired", boolVal(child.isPaired))
@@ -132,16 +197,28 @@ object FirestoreSyncClient {
             val maskParams = updateFields.joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
             val url = "$BASE_URL/pairings/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
             val res = request("POST", url, JSONObject().put("fields", fields).toString(), patchOverride = true)
-            res.code in 200..299
+            if (res.code in 200..299) {
+                CloudOpResult(ok = true, data = true, httpCode = res.code)
+            } else {
+                CloudOpResult(ok = false, httpCode = res.code, errorMessage = formatHttpFailure(res))
+            }
         }
 
-    private fun fetchPairingRaw(code: String): CloudPairingData? {
+    private fun fetchPairingRaw(code: String): CloudOpResult<CloudPairingData> {
         val url = "$BASE_URL/pairings/${enc(code)}?key=${enc(API_KEY)}"
         val res = request("GET", url, null, patchOverride = false)
-        if (res.code !in 200..299 || res.body.isBlank()) return null
+        if (res.code !in 200..299 || res.body.isBlank()) {
+            return CloudOpResult(
+                ok = false,
+                httpCode = res.code,
+                errorMessage = formatHttpFailure(res)
+            )
+        }
 
-        val root = runCatching { JSONObject(res.body) }.getOrNull() ?: return null
-        val fields = root.optJSONObject("fields") ?: return null
+        val root = runCatching { JSONObject(res.body) }.getOrNull()
+            ?: return CloudOpResult(ok = false, httpCode = res.code, errorMessage = "Malformed cloud response.")
+        val fields = root.optJSONObject("fields")
+            ?: return CloudOpResult(ok = false, httpCode = res.code, errorMessage = "Missing pairing fields.")
 
         val pairingCode = readStr(fields, "pairingCode", code)
         val childId = readStr(fields, "childId", "child-synced")
@@ -169,26 +246,30 @@ object FirestoreSyncClient {
         val ownerUid = readStr(fields, "ownerUid", "device_parent")
         val completedLessonIds = readStrArray(fields, "completedLessonIds")
 
-        return CloudPairingData(
-            pairingCode = pairingCode,
-            childId = childId,
-            childName = childName,
-            grade = grade,
-            school = school,
-            classStream = classStream,
-            deviceMode = deviceMode,
-            parentPin = parentPin,
-            dailyCapMins = dailyCapMins,
-            exchangeRateMins = exchangeRateMins,
-            mandatorySubjects = mandatorySubjects,
-            requireParentApproval = requireParentApproval,
-            availableScreenSeconds = availableScreenSeconds,
-            usedScreenTodayMins = usedScreenTodayMins,
-            learnedMinutesToday = learnedMinutesToday,
-            isLocked = isLocked,
-            isPaired = isPaired,
-            ownerUid = ownerUid,
-            completedLessonIds = completedLessonIds
+        return CloudOpResult(
+            ok = true,
+            httpCode = res.code,
+            data = CloudPairingData(
+                pairingCode = pairingCode,
+                childId = childId,
+                childName = childName,
+                grade = grade,
+                school = school,
+                classStream = classStream,
+                deviceMode = deviceMode,
+                parentPin = parentPin,
+                dailyCapMins = dailyCapMins,
+                exchangeRateMins = exchangeRateMins,
+                mandatorySubjects = mandatorySubjects,
+                requireParentApproval = requireParentApproval,
+                availableScreenSeconds = availableScreenSeconds,
+                usedScreenTodayMins = usedScreenTodayMins,
+                learnedMinutesToday = learnedMinutesToday,
+                isLocked = isLocked,
+                isPaired = isPaired,
+                ownerUid = ownerUid,
+                completedLessonIds = completedLessonIds
+            )
         )
     }
 
@@ -230,7 +311,16 @@ object FirestoreSyncClient {
         return obj
     }
 
-    private data class HttpRes(val code: Int, val body: String)
+    private data class HttpRes(val code: Int, val body: String, val exceptionMsg: String = "")
+
+    private fun formatHttpFailure(res: HttpRes): String {
+        return when {
+            res.code == -1 -> "Cannot reach Cloud Firestore (${res.exceptionMsg.ifEmpty { "check mobile data or Wi-Fi" }})."
+            res.code == 404 -> "Code not found in Cloud Firestore yet. Ensure Parent phone is connected and shows 'Synced to Cloud'."
+            res.code == 403 -> "Cloud permission denied (HTTP 403)."
+            else -> "Cloud error (HTTP ${res.code})."
+        }
+    }
 
     private fun request(
         method: String,
@@ -238,7 +328,7 @@ object FirestoreSyncClient {
         body: String?,
         patchOverride: Boolean
     ): HttpRes {
-        return runCatching {
+        return try {
             val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 10_000
@@ -260,8 +350,8 @@ object FirestoreSyncClient {
             } ?: ""
             conn.disconnect()
             HttpRes(code, text)
-        }.getOrElse {
-            HttpRes(-1, "")
+        } catch (e: Exception) {
+            HttpRes(-1, "", e.javaClass.simpleName)
         }
     }
 

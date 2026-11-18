@@ -1,8 +1,10 @@
 package com.somatime.app.guard
 
 import android.app.AppOpsManager
+import android.app.admin.DevicePolicyManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -45,11 +47,29 @@ object UsageAccessHelper {
         return Settings.canDrawOverlays(context)
     }
 
+    fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        val expected = ComponentName(context, SomaGuardAccessibilityService::class.java)
+        val enabled = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabled.split(':').any { entry ->
+            val parsed = ComponentName.unflattenFromString(entry.trim())
+            parsed == expected || entry.equals(expected.flattenToString(), ignoreCase = true)
+        }
+    }
+
+    fun isDeviceAdminActive(context: Context): Boolean {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val admin = ComponentName(context, SomaDeviceAdminReceiver::class.java)
+        return dpm.isAdminActive(admin)
+    }
+
     fun openUsageAccessSettings(context: Context) {
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        runCatching { context.startActivity(intent) }
     }
 
     fun openOverlaySettings(context: Context) {
@@ -59,7 +79,27 @@ object UsageAccessHelper {
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        runCatching { context.startActivity(intent) }
+    }
+
+    fun openAccessibilitySettings(context: Context) {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }
+    }
+
+    fun openDeviceAdminSettings(context: Context) {
+        val admin = ComponentName(context, SomaDeviceAdminReceiver::class.java)
+        val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+            putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+            putExtra(
+                DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                "Protects SomaTime from being uninstalled or force-stopped by learners."
+            )
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { context.startActivity(intent) }
     }
 
     fun getForegroundPackageName(context: Context): String? {

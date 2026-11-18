@@ -116,7 +116,20 @@ function sanitizeId(raw: string, fallback: string): string {
 }
 
 export function normalizePairingCode(raw: string): string {
-  return raw.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 24);
+  const cleaned = raw.trim().toUpperCase().replace(/[^A-Z0-9-\s]/g, '');
+  if (!cleaned) return '';
+  const collapsed = cleaned.replace(/\s+/g, '-').replace(/-+/g, '-');
+  if (collapsed.startsWith('SOMA-')) {
+    return collapsed.slice(0, 24);
+  }
+  if (collapsed.startsWith('SOMA') && collapsed.length > 4) {
+    const rest = collapsed.slice(4).replace(/^-+/, '');
+    return `SOMA-${rest}`.slice(0, 24);
+  }
+  if (/^[A-Z0-9]{4,12}$/.test(collapsed)) {
+    return `SOMA-${collapsed}`.slice(0, 24);
+  }
+  return collapsed.slice(0, 24);
 }
 
 export function isValidPairingCodeFormat(code: string): boolean {

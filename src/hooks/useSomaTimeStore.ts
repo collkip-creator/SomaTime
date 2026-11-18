@@ -147,13 +147,40 @@ export function useSomaTimeStore() {
     [state.children, state.selectedChildId]
   );
 
+  const [cloudSyncOk, setCloudSyncOk] = useState(false);
+  const [cloudSyncMessage, setCloudSyncMessage] = useState('Syncing pairing codes to Cloud...');
+
   // On initial mount in Parent mode, ensure existing local child pairing codes are published to Cloud Firestore
   useEffect(() => {
     if (stateRef.current.roleView !== 'parent') return;
     const pin = stateRef.current.parentAccount.pin;
-    stateRef.current.children.forEach((child) => {
-      void publishPairingToCloud(child, pin).catch(() => {});
-    });
+    Promise.all(
+      stateRef.current.children.map((child) => publishPairingToCloud(child, pin))
+    )
+      .then(() => {
+        setCloudSyncOk(true);
+        setCloudSyncMessage('Synced to Cloud ✓ · Ready for learner phone');
+      })
+      .catch(() => {
+        setCloudSyncOk(false);
+        setCloudSyncMessage('Cloud sync failed — check internet and click Sync Cloud');
+      });
+  }, []);
+
+  const retryCloudSyncNow = useCallback(async () => {
+    const child =
+      stateRef.current.children.find((c) => c.id === stateRef.current.selectedChildId) ??
+      stateRef.current.children[0];
+    if (!child) return;
+    setCloudSyncMessage(`Syncing ${child.pairingCode} to Cloud...`);
+    try {
+      await publishPairingToCloud(child, stateRef.current.parentAccount.pin);
+      setCloudSyncOk(true);
+      setCloudSyncMessage(`Synced to Cloud ✓ · Code ${child.pairingCode} is active`);
+    } catch {
+      setCloudSyncOk(false);
+      setCloudSyncMessage('Cloud sync failed — check internet connection and retry.');
+    }
   }, []);
 
   // Live Firestore real-time subscription for the active child's pairing session
@@ -371,6 +398,8 @@ export function useSomaTimeStore() {
       }));
 
       await publishPairingToCloud(newChild, validPin);
+      setCloudSyncOk(true);
+      setCloudSyncMessage(`Synced to Cloud ✓ · Code ${code} ready for learner phone`);
       return newChild;
     },
     []
@@ -387,9 +416,12 @@ export function useSomaTimeStore() {
 
       // 1. Check Cloud Firestore first (enables pairing across two separate phones!)
       let cloudMatch: CloudPairingDoc | null = null;
+      let cloudLookupError = '';
       try {
         cloudMatch = await fetchAndPairFromCloud(normalized);
-      } catch {
+      } catch (err) {
+        cloudLookupError =
+          err instanceof Error ? err.message : 'Unable to reach Cloud Firestore.';
         cloudMatch = null;
       }
 
@@ -433,7 +465,9 @@ export function useSomaTimeStore() {
       if (!matched) {
         return {
           success: false,
-          message: `No child profile matches "${normalized}". Confirm the code shown on your parent's phone and verify internet connection.`,
+          message: cloudLookupError
+            ? `Cloud lookup failed for "${normalized}". Check internet connection and retry.`
+            : `No child profile matches "${normalized}". Verify the code shown on your parent's phone (make sure the parent phone has synced to cloud).`,
         };
       }
 
@@ -831,6 +865,9 @@ export function useSomaTimeStore() {
     children: state.children,
     assignments: state.assignments,
     classRoster: state.classRoster,
+    cloudSyncOk,
+    cloudSyncMessage,
+    retryCloudSyncNow,
     setRoleView,
     setSelectedChildId,
     updateChildSettings,

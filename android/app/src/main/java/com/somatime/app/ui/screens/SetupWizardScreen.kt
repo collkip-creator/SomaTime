@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,10 +49,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.somatime.app.data.CbcCurriculumRepository
 import com.somatime.app.data.PairingResult
 import com.somatime.app.data.SomaTimeUiState
@@ -85,9 +89,11 @@ fun SetupWizardScreen(
         initialWatchMins: Int
     ) -> ChildProfile,
     onPairLearnerCode: suspend (String) -> PairingResult,
+    onRetryCloudSync: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var step by remember { mutableStateOf(WizardStep.CHOICE) }
 
@@ -107,8 +113,23 @@ fun SetupWizardScreen(
     var pairingFeedback by remember { mutableStateOf("") }
     var isPairingLearner by remember { mutableStateOf(false) }
 
-    val hasUsageStats = UsageAccessHelper.hasUsageStatsPermission(context)
-    val hasOverlay = UsageAccessHelper.canDrawOverlays(context)
+    var hasUsageStats by remember { mutableStateOf(UsageAccessHelper.hasUsageStatsPermission(context)) }
+    var hasOverlay by remember { mutableStateOf(UsageAccessHelper.canDrawOverlays(context)) }
+    var hasAccessibility by remember { mutableStateOf(UsageAccessHelper.isAccessibilityServiceEnabled(context)) }
+    var hasDeviceAdmin by remember { mutableStateOf(UsageAccessHelper.isDeviceAdminActive(context)) }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasUsageStats = UsageAccessHelper.hasUsageStatsPermission(context)
+                hasOverlay = UsageAccessHelper.canDrawOverlays(context)
+                hasAccessibility = UsageAccessHelper.isAccessibilityServiceEnabled(context)
+                hasDeviceAdmin = UsageAccessHelper.isDeviceAdminActive(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -422,6 +443,20 @@ fun SetupWizardScreen(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = Color(0xFF065F46)
                             )
+                            Text(
+                                text = uiState.cloudSyncMessage,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (uiState.cloudSyncOk) SomaEmerald else Color(0xFFDC2626),
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (!uiState.cloudSyncOk) {
+                                OutlinedButton(
+                                    onClick = onRetryCloudSync,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Retry Cloud Sync")
+                                }
+                            }
                             Button(
                                 onClick = { step = WizardStep.LEARNER_PAIR },
                                 modifier = Modifier.fillMaxWidth(),
@@ -509,23 +544,42 @@ fun SetupWizardScreen(
                             ) {
                                 Icon(Icons.Rounded.Shield, contentDescription = null, tint = SomaTeal)
                                 Text(
-                                    "Background Screen Guard Permissions",
+                                    "Phone Lockdown & Swipe-Down Guard Permissions",
                                     style = MaterialTheme.typography.labelLarge,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
+                            Text(
+                                "Enable all 4 toggles on the learner's phone so Home, Recents, Back, Quick Settings swipe-down, and uninstall are blocked during lock.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF475569)
+                            )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(
                                     onClick = { UsageAccessHelper.openUsageAccessSettings(context) },
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text(if (hasUsageStats) "Usage ✓" else "Usage Access")
+                                    Text(if (hasUsageStats) "Usage ✓" else "1. Usage Access")
                                 }
                                 OutlinedButton(
                                     onClick = { UsageAccessHelper.openOverlaySettings(context) },
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text(if (hasOverlay) "Overlay ✓" else "Allow Overlay")
+                                    Text(if (hasOverlay) "Overlay ✓" else "2. Overlay")
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { UsageAccessHelper.openAccessibilitySettings(context) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (hasAccessibility) "Swipe Guard ✓" else "3. Lockdown Guard")
+                                }
+                                OutlinedButton(
+                                    onClick = { UsageAccessHelper.openDeviceAdminSettings(context) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (hasDeviceAdmin) "Uninstall Lock ✓" else "4. Anti-Uninstall")
                                 }
                             }
 

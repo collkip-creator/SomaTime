@@ -49,6 +49,8 @@ data class SomaTimeUiState(
     val parentPin: String = CbcCurriculumRepository.PARENT_PIN,
     val showSetupWizard: Boolean = false,
     val guardServiceRunning: Boolean = false,
+    val cloudSyncOk: Boolean = false,
+    val cloudSyncMessage: String = "Syncing pairing codes to Cloud...",
     val lastDetectedForegroundApp: String? = null,
     val children: List<ChildProfile> = CbcCurriculumRepository.initialChildren(),
     val assignments: List<TeacherAssignment> = CbcCurriculumRepository.initialAssignments(),
@@ -77,10 +79,24 @@ class SomaTimeStore private constructor(context: Context) {
         val current = _state.value
         if (current.roleView != RoleView.PARENT) return
         scope.launch {
+            var allOk = true
+            var lastErr = ""
             current.children.forEach { child ->
-                runCatching {
-                    FirestoreSyncClient.publishPairingSession(child, current.parentPin)
+                val res = FirestoreSyncClient.publishPairingSession(child, current.parentPin)
+                if (!res.ok) {
+                    allOk = false
+                    lastErr = res.errorMessage
                 }
+            }
+            _state.update {
+                it.copy(
+                    cloudSyncOk = allOk,
+                    cloudSyncMessage = if (allOk) {
+                        "Synced to Cloud ✓ · Ready for daughter's phone"
+                    } else {
+                        lastErr.ifEmpty { "Cloud sync pending — check internet and tap Retry Sync" }
+                    }
+                )
             }
         }
     }
@@ -228,7 +244,7 @@ class SomaTimeStore private constructor(context: Context) {
                 }
                 newlyLockedChild?.let { locked ->
                     scope.launch {
-                        runCatching { FirestoreSyncClient.patchLearnerSync(locked) }
+                        FirestoreSyncClient.patchLearnerSync(locked)
                     }
                 }
             }
@@ -247,6 +263,25 @@ class SomaTimeStore private constructor(context: Context) {
         _state.update { it.copy(selectedChildId = childId).also(::persistState) }
     }
 
+    fun retryCloudSyncNow() {
+        val current = _state.value
+        val child = current.selectedChild
+        _state.update { it.copy(cloudSyncMessage = "Syncing ${child.pairingCode} to Cloud...") }
+        scope.launch {
+            val res = FirestoreSyncClient.publishPairingSession(child, current.parentPin)
+            _state.update {
+                it.copy(
+                    cloudSyncOk = res.ok,
+                    cloudSyncMessage = if (res.ok) {
+                        "Synced to Cloud ✓ · Code ${child.pairingCode} is active"
+                    } else {
+                        res.errorMessage
+                    }
+                )
+            }
+        }
+    }
+
     fun updateChild(childId: String, transform: (ChildProfile) -> ChildProfile) {
         var updatedTarget: ChildProfile? = null
         _state.update { current ->
@@ -262,7 +297,17 @@ class SomaTimeStore private constructor(context: Context) {
         val pin = _state.value.parentPin
         updatedTarget?.let { target ->
             scope.launch {
-                runCatching { FirestoreSyncClient.publishPairingSession(target, pin) }
+                val res = FirestoreSyncClient.publishPairingSession(target, pin)
+                _state.update {
+                    it.copy(
+                        cloudSyncOk = res.ok,
+                        cloudSyncMessage = if (res.ok) {
+                            "Synced to Cloud ✓ · Code ${target.pairingCode} is active"
+                        } else {
+                            res.errorMessage
+                        }
+                    )
+                }
             }
         }
     }
@@ -324,7 +369,17 @@ class SomaTimeStore private constructor(context: Context) {
                 children = listOf(created) + current.children
             ).also(::persistState)
         }
-        runCatching { FirestoreSyncClient.publishPairingSession(created, resolvedPin) }
+        val syncRes = FirestoreSyncClient.publishPairingSession(created, resolvedPin)
+        _state.update {
+            it.copy(
+                cloudSyncOk = syncRes.ok,
+                cloudSyncMessage = if (syncRes.ok) {
+                    "Synced to Cloud ✓ · Enter $code on your daughter's phone"
+                } else {
+                    syncRes.errorMessage
+                }
+            )
+        }
         return created
     }
 
@@ -334,9 +389,10 @@ class SomaTimeStore private constructor(context: Context) {
             return PairingResult(false, message = "Enter the pairing code generated on your parent's phone.")
         }
 
-        // 1. Check Cloud Firestore first so two separate phones pair cleanly!
-        val cloud = runCatching { FirestoreSyncClient.fetchAndPairSession(normalized) }.getOrNull()
-        if (cloud != null) {
+        // 1. Query Cloud Firestore so two separate phones pair across devices
+        val cloudRes = FirestoreSyncClient.fetchAndPairSession(normalized)
+        val cloud = cloudRes.data
+        if (cloudRes.ok && cloud != null) {
             val existingLocal = _state.value.children.firstOrNull {
                 it.id == cloud.childId || FirestoreSyncClient.normalizeCode(it.pairingCode) == normalized
             }
@@ -379,6 +435,8 @@ class SomaTimeStore private constructor(context: Context) {
                     parentPin = cloud.parentPin,
                     handOffActive = true,
                     showSetupWizard = false,
+                    cloudSyncOk = true,
+                    cloudSyncMessage = "Paired via Cloud ✓",
                     children = updatedList
                 ).also(::persistState)
             }
@@ -390,12 +448,14 @@ class SomaTimeStore private constructor(context: Context) {
             )
         }
 
-        // 2. Fallback: local device list
+        // 2. Fallback: local device list (single-device demo)
         val matched = _state.value.children.firstOrNull {
             FirestoreSyncClient.normalizeCode(it.pairingCode) == normalized
         } ?: return PairingResult(
             false,
-            message = "No child profile matches \"$normalized\". Verify the code on your parent's phone and ensure internet is connected."
+            message = cloudRes.errorMessage.ifEmpty {
+                "No child profile matches \"$normalized\"."
+            }
         )
 
         val pairedLocal = matched.copy(deviceMode = DeviceMode.OWN_PHONE, isPaired = true)
@@ -412,7 +472,7 @@ class SomaTimeStore private constructor(context: Context) {
             ).also(::persistState)
         }
         scope.launch {
-            runCatching { FirestoreSyncClient.publishPairingSession(pairedLocal, _state.value.parentPin) }
+            FirestoreSyncClient.publishPairingSession(pairedLocal, _state.value.parentPin)
         }
 
         return PairingResult(
@@ -428,9 +488,9 @@ class SomaTimeStore private constructor(context: Context) {
         if (!FirestoreSyncClient.isValidCode(FirestoreSyncClient.normalizeCode(child.pairingCode))) return
 
         if (current.roleView == RoleView.CHILD && child.isPaired) {
-            // Pull parent changes (e.g., +15m unlock, daily cap, custom PIN) first
-            val cloud = runCatching { FirestoreSyncClient.fetchPairingSession(child.pairingCode) }.getOrNull()
-            if (cloud != null) {
+            val cloudRes = FirestoreSyncClient.fetchPairingSession(child.pairingCode)
+            val cloud = cloudRes.data
+            if (cloudRes.ok && cloud != null) {
                 val remoteUnlockedOrChanged =
                     (!cloud.isLocked && child.isLocked && cloud.availableScreenSeconds > child.availableScreenSeconds) ||
                         cloud.dailyCapMins != child.dailyCapMins ||
@@ -456,11 +516,10 @@ class SomaTimeStore private constructor(context: Context) {
                     return
                 }
             }
-            // Otherwise push current learner watch-minute balance & lock status to Firestore
-            runCatching { FirestoreSyncClient.patchLearnerSync(_state.value.selectedChild) }
+            FirestoreSyncClient.patchLearnerSync(_state.value.selectedChild)
         } else if (current.roleView == RoleView.PARENT) {
-            val cloud = runCatching { FirestoreSyncClient.fetchPairingSession(child.pairingCode) }.getOrNull()
-                ?: return
+            val cloudRes = FirestoreSyncClient.fetchPairingSession(child.pairingCode)
+            val cloud = cloudRes.data ?: return
             _state.update { s ->
                 val nextChildren = s.children.map { c ->
                     if (c.id != child.id) {
@@ -480,7 +539,15 @@ class SomaTimeStore private constructor(context: Context) {
                         )
                     }
                 }
-                s.copy(children = nextChildren).also(::persistState)
+                s.copy(
+                    cloudSyncOk = true,
+                    cloudSyncMessage = if (cloud.isPaired) {
+                        "Synced to Cloud ✓ · Learner phone paired"
+                    } else {
+                        "Synced to Cloud ✓ · Ready for daughter's phone"
+                    },
+                    children = nextChildren
+                ).also(::persistState)
             }
         }
     }
@@ -522,7 +589,17 @@ class SomaTimeStore private constructor(context: Context) {
             ).also(::persistState)
         }
         scope.launch {
-            runCatching { FirestoreSyncClient.publishPairingSession(created, _state.value.parentPin) }
+            val res = FirestoreSyncClient.publishPairingSession(created, _state.value.parentPin)
+            _state.update {
+                it.copy(
+                    cloudSyncOk = res.ok,
+                    cloudSyncMessage = if (res.ok) {
+                        "Synced to Cloud ✓ · Code ${created.pairingCode} is active"
+                    } else {
+                        res.errorMessage
+                    }
+                )
+            }
         }
     }
 
@@ -549,7 +626,7 @@ class SomaTimeStore private constructor(context: Context) {
         }
         updatedTarget?.let { target ->
             scope.launch {
-                runCatching { FirestoreSyncClient.publishPairingSession(target, _state.value.parentPin) }
+                FirestoreSyncClient.publishPairingSession(target, _state.value.parentPin)
             }
         }
     }
@@ -581,7 +658,7 @@ class SomaTimeStore private constructor(context: Context) {
         }
         updatedTarget?.let { target ->
             scope.launch {
-                runCatching { FirestoreSyncClient.publishPairingSession(target, _state.value.parentPin) }
+                FirestoreSyncClient.publishPairingSession(target, _state.value.parentPin)
             }
         }
     }
@@ -665,7 +742,7 @@ class SomaTimeStore private constructor(context: Context) {
 
         updatedTarget?.let { target ->
             scope.launch {
-                runCatching { FirestoreSyncClient.patchLearnerSync(target) }
+                FirestoreSyncClient.patchLearnerSync(target)
             }
         }
 
@@ -692,7 +769,7 @@ class SomaTimeStore private constructor(context: Context) {
         }
         updatedTarget?.let { target ->
             scope.launch {
-                runCatching { FirestoreSyncClient.publishPairingSession(target, _state.value.parentPin) }
+                FirestoreSyncClient.publishPairingSession(target, _state.value.parentPin)
             }
         }
     }

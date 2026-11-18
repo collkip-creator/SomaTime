@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">SomaTime</string>
+    <string name="accessibility_service_description">Blocks notification shade swipe-down, settings, and entertainment apps while SomaTime CBC learning lock is active.</string>
+    <string name="device_admin_description">Protects SomaTime from unauthorized removal by learners during parental screen-time limits.</string>
 </resources>

@@ -25,6 +25,9 @@ interface ParentDashboardProps {
   childrenList: ChildProfile[];
   selectedChild: ChildProfile;
   parentPin: string;
+  cloudSyncOk: boolean;
+  cloudSyncMessage: string;
+  onRetryCloudSync: () => void;
   onSelectChild: (id: string) => void;
   onUpdateChild: (id: string, patch: Partial<ChildProfile>) => void;
   onRegeneratePairingCode: (id: string) => void;
@@ -40,6 +43,9 @@ export function ParentDashboard({
   childrenList,
   selectedChild,
   parentPin,
+  cloudSyncOk,
+  cloudSyncMessage,
+  onRetryCloudSync,
   onSelectChild,
   onUpdateChild,
   onRegeneratePairingCode,
@@ -308,8 +314,23 @@ export function ParentDashboard({
                   : 'Not yet paired · Enter this code on learner phone'}
               </span>
             </div>
+            <p
+              className={`mt-1.5 text-xs font-semibold ${
+                cloudSyncOk ? 'text-emerald-700' : 'text-rose-600'
+              }`}
+            >
+              {cloudSyncMessage}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onRetryCloudSync}
+              className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Sync Cloud</span>
+            </button>
             <button
               type="button"
               onClick={() => onRegeneratePairingCode(selectedChild.id)}
@@ -477,7 +498,7 @@ export function ParentDashboard({
                 >
                   <p className="text-xs font-bold">Require Parent PIN / Approval</p>
                   <p className="mt-0.5 text-xs text-slate-600">
-                    Holds earned time in queue until PIN 1234
+                    Holds earned time in queue until PIN {parentPin}
                   </p>
                 </button>
               </div>

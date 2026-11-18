@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -46,6 +48,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.guard.ScreenTimeGuardService
 import com.somatime.app.model.PendingApproval
@@ -68,6 +73,10 @@ private sealed interface PinIntent {
 
 class MainActivity : ComponentActivity() {
 
+    @Volatile
+    private var takeoverLockEnforced: Boolean = false
+    private var isLockTaskActive: Boolean = false
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* Permission result handled gracefully */ }
@@ -88,7 +97,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SomaTimeTheme {
-                SomaTimeRoot(store = store)
+                SomaTimeRoot(
+                    store = store,
+                    onTakeoverLockChanged = { locked ->
+                        takeoverLockEnforced = locked
+                        applyTakeoverSystemUi(locked)
+                    }
+                )
             }
         }
     }
@@ -96,6 +111,93 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIncomingIntent(intent, SomaTimeStore.getInstance(this))
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (takeoverLockEnforced) {
+            hideSystemBars()
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (takeoverLockEnforced) {
+            relaunchToFront()
+        }
+    }
+
+    private fun isBlockedHardwareKey(keyCode: Int): Boolean = keyCode in setOf(
+        KeyEvent.KEYCODE_APP_SWITCH,
+        KeyEvent.KEYCODE_MENU,
+        KeyEvent.KEYCODE_SEARCH,
+        KeyEvent.KEYCODE_VOLUME_UP,
+        KeyEvent.KEYCODE_VOLUME_DOWN,
+        KeyEvent.KEYCODE_VOLUME_MUTE,
+        KeyEvent.KEYCODE_CAMERA,
+        KeyEvent.KEYCODE_VOICE_ASSIST,
+        KeyEvent.KEYCODE_ASSIST
+    )
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (takeoverLockEnforced && isBlockedHardwareKey(keyCode)) {
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (takeoverLockEnforced && isBlockedHardwareKey(keyCode)) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    private fun applyTakeoverSystemUi(locked: Boolean) {
+        if (locked) {
+            hideSystemBars()
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (!isLockTaskActive) {
+                runCatching {
+                    startLockTask()
+                    isLockTaskActive = true
+                }
+            }
+        } else {
+            if (isLockTaskActive) {
+                runCatching {
+                    stopLockTask()
+                    isLockTaskActive = false
+                }
+            }
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            showSystemBars()
+        }
+    }
+
+    private fun hideSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    }
+
+    private fun showSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+
+    private fun relaunchToFront() {
+        val lockIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            )
+        }
+        runCatching { startActivity(lockIntent) }
     }
 
     private fun handleIncomingIntent(intent: Intent?, store: SomaTimeStore) {
@@ -108,7 +210,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun SomaTimeRoot(store: SomaTimeStore) {
+private fun SomaTimeRoot(
+    store: SomaTimeStore,
+    onTakeoverLockChanged: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     val uiState by store.state.collectAsState()
     var pinIntent by remember { mutableStateOf<PinIntent?>(null) }
@@ -131,8 +236,16 @@ private fun SomaTimeRoot(store: SomaTimeStore) {
         (uiState.selectedChild.isLocked || uiState.selectedChild.availableScreenSeconds <= 0) &&
         (uiState.handOffActive || uiState.selectedChild.isPaired)
 
+    LaunchedEffect(isTakeoverLocked) {
+        onTakeoverLockChanged(isTakeoverLocked)
+    }
+
     BackHandler(enabled = isTakeoverLocked) {
-        pinIntent = PinIntent.UnlockChild
+        if (pinIntent == null) {
+            pinIntent = PinIntent.UnlockChild
+        } else {
+            pinIntent = null
+        }
     }
 
     fun handleRoleSelect(nextRole: RoleView) {
@@ -236,6 +349,7 @@ private fun SomaTimeRoot(store: SomaTimeStore) {
                     uiState = uiState,
                     onRegisterParentAndChild = store::registerParentAndChildAsync,
                     onPairLearnerCode = store::pairLearnerByCodeAsync,
+                    onRetryCloudSync = store::retryCloudSyncNow,
                     onDismiss = { store.setShowSetupWizard(false) }
                 )
             } else {
@@ -268,6 +382,7 @@ private fun SomaTimeRoot(store: SomaTimeStore) {
                         onActivateHandOff = store::activateHandOffMode,
                         onAddChild = store::addChild,
                         onRegeneratePairingCode = store::regeneratePairingCode,
+                        onRetryCloudSync = store::retryCloudSyncNow,
                         onOpenSetupWizard = { store.setShowSetupWizard(true) },
                         onRequestApprovalPin = { approval ->
                             pinIntent = PinIntent.ApproveMinutes(approval)
