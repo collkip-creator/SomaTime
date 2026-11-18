@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ASSETS,
   CBC_LESSONS,
@@ -8,6 +8,14 @@ import {
   PARENT_PIN,
   generatePairingCode,
 } from '../data/cbcCurriculum';
+import {
+  fetchAndPairFromCloud,
+  normalizePairingCode,
+  publishPairingToCloud,
+  subscribePairingSession,
+  syncLearnerStateToCloud,
+  type CloudPairingDoc,
+} from '../lib/firebase';
 import type {
   CBCLesson,
   CBCRubric,
@@ -84,8 +92,47 @@ export function formatTimeClock(totalSeconds: number): string {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+function cloudDocToChildProfile(
+  cloud: CloudPairingDoc,
+  existing?: ChildProfile
+): ChildProfile {
+  const isUpper = cloud.grade >= 7;
+  return {
+    id: cloud.childId,
+    name: cloud.childName,
+    grade: cloud.grade,
+    school: cloud.school,
+    classStream: cloud.classStream || `Grade ${cloud.grade} East - ${cloud.school}`,
+    avatarUrl: existing?.avatarUrl || (isUpper ? ASSETS.brianAvatar : ASSETS.aminaAvatar),
+    deviceMode: cloud.deviceMode,
+    pairingCode: cloud.pairingCode,
+    isPaired: cloud.isPaired,
+    backgroundGuardActive: cloud.isPaired || Boolean(existing?.backgroundGuardActive),
+    dailyCapMins: cloud.dailyCapMins,
+    exchangeRateMins: cloud.exchangeRateMins,
+    mandatorySubjects: (cloud.mandatorySubjects || []) as LearningArea[],
+    requireParentApproval: cloud.requireParentApproval,
+    availableScreenSeconds: cloud.availableScreenSeconds,
+    usedScreenTodayMins: cloud.usedScreenTodayMins,
+    learnedMinutesToday: cloud.learnedMinutesToday,
+    isLocked: cloud.isLocked || cloud.availableScreenSeconds <= 0,
+    activeAppName: existing?.activeAppName ?? null,
+    completedLessonIds: cloud.completedLessonIds || existing?.completedLessonIds || [],
+    pendingApprovals: existing?.pendingApprovals ?? [],
+    activityLogs: existing?.activityLogs ?? [],
+    rubricByArea: existing?.rubricByArea ?? {
+      Mathematics: 'ME',
+      English: 'ME',
+    },
+    streakDays: existing?.streakDays ?? 1,
+  };
+}
+
 export function useSomaTimeStore() {
   const [state, setState] = useState<PersistedState>(() => loadState());
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const lastCloudSyncRef = useRef<number>(0);
 
   useEffect(() => {
     try {
@@ -95,9 +142,76 @@ export function useSomaTimeStore() {
     }
   }, [state]);
 
+  const selectedChild = useMemo(
+    () => state.children.find((c) => c.id === state.selectedChildId) ?? state.children[0],
+    [state.children, state.selectedChildId]
+  );
+
+  // On initial mount in Parent mode, ensure existing local child pairing codes are published to Cloud Firestore
+  useEffect(() => {
+    if (stateRef.current.roleView !== 'parent') return;
+    const pin = stateRef.current.parentAccount.pin;
+    stateRef.current.children.forEach((child) => {
+      void publishPairingToCloud(child, pin).catch(() => {});
+    });
+  }, []);
+
+  // Live Firestore real-time subscription for the active child's pairing session
+  useEffect(() => {
+    const code = selectedChild?.pairingCode;
+    if (!code) return;
+
+    const unsubscribe = subscribePairingSession(
+      code,
+      (cloud) => {
+        setState((prev) => {
+          const idx = prev.children.findIndex(
+            (c) =>
+              c.id === cloud.childId ||
+              normalizePairingCode(c.pairingCode) === normalizePairingCode(cloud.pairingCode)
+          );
+          if (idx === -1) return prev;
+          const current = prev.children[idx];
+          const sameState =
+            current.isPaired === cloud.isPaired &&
+            current.isLocked === cloud.isLocked &&
+            current.dailyCapMins === cloud.dailyCapMins &&
+            current.exchangeRateMins === cloud.exchangeRateMins &&
+            current.usedScreenTodayMins === cloud.usedScreenTodayMins &&
+            current.learnedMinutesToday === cloud.learnedMinutesToday &&
+            current.requireParentApproval === cloud.requireParentApproval &&
+            Math.abs(current.availableScreenSeconds - cloud.availableScreenSeconds) <= 2 &&
+            prev.parentAccount.pin === cloud.parentPin;
+
+          if (sameState) return prev;
+
+          const merged = cloudDocToChildProfile(cloud, current);
+          const nextChildren = [...prev.children];
+          nextChildren[idx] = merged;
+          return {
+            ...prev,
+            parentAccount: {
+              ...prev.parentAccount,
+              pin: cloud.parentPin || prev.parentAccount.pin,
+            },
+            children: nextChildren,
+          };
+        });
+      },
+      () => {
+        // Silently tolerate transient offline listener errors
+      }
+    );
+
+    return () => unsubscribe();
+  }, [selectedChild?.pairingCode]);
+
   // Live 1-second background monitor ticker checking available watch minutes
   useEffect(() => {
     const interval = window.setInterval(() => {
+      let lockedChildToSync: ChildProfile | null = null;
+      let pairedChildToSync: ChildProfile | null = null;
+
       setState((prev) => {
         const hasTickingChild = prev.children.some(
           (c) => !c.isLocked && c.availableScreenSeconds > 0
@@ -114,26 +228,36 @@ export function useSomaTimeStore() {
             ? Math.min(child.dailyCapMins, child.usedScreenTodayMins + 1)
             : child.usedScreenTodayMins;
           const nowLocked = nextSeconds === 0;
-          return {
+          const updated: ChildProfile = {
             ...child,
             availableScreenSeconds: nextSeconds,
             usedScreenTodayMins: nextUsed,
             isLocked: nowLocked,
             activeAppName: nowLocked ? null : child.activeAppName,
           };
+          if (nowLocked && updated.isPaired) {
+            lockedChildToSync = updated;
+          } else if (updated.isPaired && updated.id === prev.selectedChildId) {
+            pairedChildToSync = updated;
+          }
+          return updated;
         });
 
         return changed ? { ...prev, children: nextChildren } : prev;
       });
+
+      const now = Date.now();
+      if (lockedChildToSync) {
+        lastCloudSyncRef.current = now;
+        void syncLearnerStateToCloud(lockedChildToSync).catch(() => {});
+      } else if (pairedChildToSync && now - lastCloudSyncRef.current > 10_000) {
+        lastCloudSyncRef.current = now;
+        void syncLearnerStateToCloud(pairedChildToSync).catch(() => {});
+      }
     }, 1000);
 
     return () => window.clearInterval(interval);
   }, []);
-
-  const selectedChild = useMemo(
-    () => state.children.find((c) => c.id === state.selectedChildId) ?? state.children[0],
-    [state.children, state.selectedChildId]
-  );
 
   const setRoleView = useCallback((roleView: RoleView) => {
     setState((prev) => ({ ...prev, roleView }));
@@ -145,27 +269,45 @@ export function useSomaTimeStore() {
 
   const updateChildSettings = useCallback(
     (childId: string, patch: Partial<ChildProfile>) => {
-      setState((prev) => ({
-        ...prev,
-        children: prev.children.map((c) => (c.id === childId ? { ...c, ...patch } : c)),
-      }));
+      let updatedTarget: ChildProfile | null = null;
+      setState((prev) => {
+        const nextChildren = prev.children.map((c) => {
+          if (c.id !== childId) return c;
+          updatedTarget = { ...c, ...patch };
+          return updatedTarget;
+        });
+        return { ...prev, children: nextChildren };
+      });
+      if (updatedTarget) {
+        void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+          () => {}
+        );
+      }
     },
     []
   );
 
   const regeneratePairingCode = useCallback((childId: string) => {
     const nextCode = generatePairingCode();
+    let updatedTarget: ChildProfile | null = null;
     setState((prev) => ({
       ...prev,
-      children: prev.children.map((c) =>
-        c.id === childId ? { ...c, pairingCode: nextCode } : c
-      ),
+      children: prev.children.map((c) => {
+        if (c.id !== childId) return c;
+        updatedTarget = { ...c, pairingCode: nextCode, isPaired: false };
+        return updatedTarget;
+      }),
     }));
+    if (updatedTarget) {
+      void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+        () => {}
+      );
+    }
     return nextCode;
   }, []);
 
   const registerParentAndChild = useCallback(
-    (input: {
+    async (input: {
       parentName: string;
       parentContact: string;
       parentPin: string;
@@ -174,10 +316,15 @@ export function useSomaTimeStore() {
       childSchool: string;
       dailyCapMins: number;
       initialWatchMins: number;
-    }): ChildProfile => {
+    }): Promise<ChildProfile> => {
       const id = `child-${Date.now()}`;
       const isUpper = input.childGrade >= 7;
       const code = generatePairingCode();
+      const validPin =
+        input.parentPin.trim().length === 4
+          ? input.parentPin.trim()
+          : stateRef.current.parentAccount.pin;
+
       const newChild: ChildProfile = {
         id,
         name: input.childName.trim(),
@@ -217,31 +364,76 @@ export function useSomaTimeStore() {
         parentAccount: {
           name: input.parentName.trim() || prev.parentAccount.name,
           contact: input.parentContact.trim() || prev.parentAccount.contact,
-          pin: input.parentPin.trim().length === 4 ? input.parentPin.trim() : prev.parentAccount.pin,
+          pin: validPin,
           registered: true,
         },
         children: [newChild, ...prev.children],
       }));
 
+      await publishPairingToCloud(newChild, validPin);
       return newChild;
     },
     []
   );
 
   const pairLearnerByCode = useCallback(
-    (rawCode: string): { success: boolean; child?: ChildProfile; message: string } => {
-      const normalized = rawCode.trim().toUpperCase();
+    async (
+      rawCode: string
+    ): Promise<{ success: boolean; child?: ChildProfile; message: string }> => {
+      const normalized = normalizePairingCode(rawCode);
       if (!normalized) {
         return { success: false, message: 'Please enter the pairing code from your parent.' };
       }
 
-      const matched = state.children.find(
-        (c) => c.pairingCode.toUpperCase() === normalized
+      // 1. Check Cloud Firestore first (enables pairing across two separate phones!)
+      let cloudMatch: CloudPairingDoc | null = null;
+      try {
+        cloudMatch = await fetchAndPairFromCloud(normalized);
+      } catch {
+        cloudMatch = null;
+      }
+
+      if (cloudMatch) {
+        const existingLocal = stateRef.current.children.find(
+          (c) =>
+            c.id === cloudMatch.childId ||
+            normalizePairingCode(c.pairingCode) === normalized
+        );
+        const syncedChild = cloudDocToChildProfile(cloudMatch, existingLocal);
+
+        setState((prev) => {
+          const exists = prev.children.some((c) => c.id === syncedChild.id);
+          const nextChildren = exists
+            ? prev.children.map((c) => (c.id === syncedChild.id ? syncedChild : c))
+            : [syncedChild, ...prev.children];
+          return {
+            ...prev,
+            roleView: 'child',
+            selectedChildId: syncedChild.id,
+            handOffActive: true,
+            parentAccount: {
+              ...prev.parentAccount,
+              pin: cloudMatch.parentPin || prev.parentAccount.pin,
+            },
+            children: nextChildren,
+          };
+        });
+
+        return {
+          success: true,
+          child: syncedChild,
+          message: `Paired with ${syncedChild.name}! Background watch-minute guard is now active.`,
+        };
+      }
+
+      // 2. Fallback: check local state (same-device demo) and sync up to Firestore
+      const matched = stateRef.current.children.find(
+        (c) => normalizePairingCode(c.pairingCode) === normalized
       );
       if (!matched) {
         return {
           success: false,
-          message: `No child profile matches "${normalized}". Check the Parent Dashboard for the active code.`,
+          message: `No child profile matches "${normalized}". Confirm the code shown on your parent's phone and verify internet connection.`,
         };
       }
 
@@ -257,17 +449,12 @@ export function useSomaTimeStore() {
         roleView: 'child',
         selectedChildId: matched.id,
         handOffActive: true,
-        children: prev.children.map((c) =>
-          c.id === matched.id
-            ? {
-                ...c,
-                deviceMode: 'own_phone',
-                isPaired: true,
-                backgroundGuardActive: true,
-              }
-            : c
-        ),
+        children: prev.children.map((c) => (c.id === matched.id ? updatedChild : c)),
       }));
+
+      void publishPairingToCloud(updatedChild, stateRef.current.parentAccount.pin).catch(
+        () => {}
+      );
 
       return {
         success: true,
@@ -275,7 +462,7 @@ export function useSomaTimeStore() {
         message: `Paired with ${matched.name}! Background watch-minute guard is now active.`,
       };
     },
-    [state.children]
+    []
   );
 
   const addChildProfile = useCallback(
@@ -319,29 +506,36 @@ export function useSomaTimeStore() {
         selectedChildId: id,
         children: [...prev.children, newChild],
       }));
+      void publishPairingToCloud(newChild, stateRef.current.parentAccount.pin).catch(() => {});
     },
     []
   );
 
   const activateHandOffMode = useCallback((childId: string) => {
+    let updatedTarget: ChildProfile | null = null;
     setState((prev) => ({
       ...prev,
       roleView: 'child',
       selectedChildId: childId,
       handOffActive: true,
-      children: prev.children.map((c) =>
-        c.id === childId
-          ? {
-              ...c,
-              deviceMode: 'hand_off',
-              backgroundGuardActive: true,
-              isLocked: true,
-              availableScreenSeconds: 0,
-              activeAppName: null,
-            }
-          : c
-      ),
+      children: prev.children.map((c) => {
+        if (c.id !== childId) return c;
+        updatedTarget = {
+          ...c,
+          deviceMode: 'hand_off',
+          backgroundGuardActive: true,
+          isLocked: true,
+          availableScreenSeconds: 0,
+          activeAppName: null,
+        };
+        return updatedTarget;
+      }),
     }));
+    if (updatedTarget) {
+      void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+        () => {}
+      );
+    }
   }, []);
 
   const exitHandOffToParent = useCallback(() => {
@@ -353,22 +547,27 @@ export function useSomaTimeStore() {
   }, []);
 
   const simulateTimeExpired = useCallback((childId: string) => {
+    let updatedTarget: ChildProfile | null = null;
     setState((prev) => ({
       ...prev,
-      children: prev.children.map((c) =>
-        c.id === childId
-          ? {
-              ...c,
-              availableScreenSeconds: 0,
-              isLocked: true,
-              activeAppName: null,
-            }
-          : c
-      ),
+      children: prev.children.map((c) => {
+        if (c.id !== childId) return c;
+        updatedTarget = {
+          ...c,
+          availableScreenSeconds: 0,
+          isLocked: true,
+          activeAppName: null,
+        };
+        return updatedTarget;
+      }),
     }));
+    if (updatedTarget) {
+      void syncLearnerStateToCloud(updatedTarget).catch(() => {});
+    }
   }, []);
 
   const unlockWithParentPin = useCallback((childId: string, bonusMins = 15) => {
+    let updatedTarget: ChildProfile | null = null;
     setState((prev) => ({
       ...prev,
       handOffActive: false,
@@ -376,13 +575,19 @@ export function useSomaTimeStore() {
         if (c.id !== childId) return c;
         const remainingCapMins = Math.max(0, c.dailyCapMins - c.usedScreenTodayMins);
         const grantedMins = Math.max(5, Math.min(bonusMins, remainingCapMins || bonusMins));
-        return {
+        updatedTarget = {
           ...c,
           isLocked: false,
           availableScreenSeconds: c.availableScreenSeconds + grantedMins * 60,
         };
+        return updatedTarget;
       }),
     }));
+    if (updatedTarget) {
+      void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+        () => {}
+      );
+    }
   }, []);
 
   const selectActiveApp = useCallback((childId: string, appName: string | null) => {
@@ -412,6 +617,7 @@ export function useSomaTimeStore() {
         queuedForApproval: false,
         cappedOut: false,
       };
+      let updatedTarget: ChildProfile | null = null;
 
       setState((prev) => {
         const targetChild = prev.children.find((c) => c.id === childId);
@@ -473,7 +679,7 @@ export function useSomaTimeStore() {
 
           const unlockedNow = !queuedForApproval && earnedMins > 0;
 
-          return {
+          updatedTarget = {
             ...c,
             learnedMinutesToday: c.learnedMinutesToday + lesson.durationMins,
             completedLessonIds,
@@ -488,6 +694,7 @@ export function useSomaTimeStore() {
               [lesson.learningArea]: rubric,
             },
           };
+          return updatedTarget;
         });
 
         const nextAssignments = prev.assignments.map((assign) => {
@@ -519,6 +726,10 @@ export function useSomaTimeStore() {
         };
       });
 
+      if (updatedTarget) {
+        void syncLearnerStateToCloud(updatedTarget).catch(() => {});
+      }
+
       return result;
     },
     []
@@ -526,6 +737,7 @@ export function useSomaTimeStore() {
 
   const resolveApproval = useCallback(
     (childId: string, approvalId: string, approved: boolean) => {
+      let updatedTarget: ChildProfile | null = null;
       setState((prev) => ({
         ...prev,
         children: prev.children.map((c) => {
@@ -533,7 +745,7 @@ export function useSomaTimeStore() {
           const target = c.pendingApprovals.find((p) => p.id === approvalId);
           if (!target) return c;
 
-          return {
+          updatedTarget = {
             ...c,
             pendingApprovals: c.pendingApprovals.filter((p) => p.id !== approvalId),
             availableScreenSeconds: approved
@@ -546,8 +758,14 @@ export function useSomaTimeStore() {
                 : l
             ),
           };
+          return updatedTarget;
         }),
       }));
+      if (updatedTarget) {
+        void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+          () => {}
+        );
+      }
     },
     []
   );
@@ -599,6 +817,9 @@ export function useSomaTimeStore() {
     } catch {
       // Ignore storage errors
     }
+    fresh.children.forEach((child) => {
+      void publishPairingToCloud(child, fresh.parentAccount.pin).catch(() => {});
+    });
   }, []);
 
   return {

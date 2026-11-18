@@ -28,12 +28,12 @@ interface SetupOnboardingModalProps {
     childSchool: string;
     dailyCapMins: number;
     initialWatchMins: number;
-  }) => ChildProfile;
-  onPairLearnerCode: (code: string) => {
+  }) => Promise<ChildProfile>;
+  onPairLearnerCode: (code: string) => Promise<{
     success: boolean;
     child?: ChildProfile;
     message: string;
-  };
+  }>;
   onClose: () => void;
 }
 
@@ -61,28 +61,43 @@ export function SetupOnboardingModal({
   const [initialWatchMins, setInitialWatchMins] = useState(1);
   const [createdChild, setCreatedChild] = useState<ChildProfile | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isSavingParent, setIsSavingParent] = useState(false);
+  const [parentError, setParentError] = useState('');
 
   // Learner pairing state
   const [pairingInput, setPairingInput] = useState('');
   const [pairingError, setPairingError] = useState('');
+  const [isPairing, setIsPairing] = useState(false);
 
   if (!open) return null;
 
-  const handleParentSubmit = (e: React.FormEvent) => {
+  const handleParentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!childName.trim() || parentPin.trim().length !== 4) return;
-    const child = onRegisterParentAndChild({
-      parentName,
-      parentContact,
-      parentPin,
-      childName,
-      childGrade,
-      childSchool,
-      dailyCapMins,
-      initialWatchMins,
-    });
-    setCreatedChild(child);
-    setPairingInput(child.pairingCode);
+    if (!childName.trim() || parentPin.trim().length !== 4 || isSavingParent) return;
+    setIsSavingParent(true);
+    setParentError('');
+    try {
+      const child = await onRegisterParentAndChild({
+        parentName,
+        parentContact,
+        parentPin,
+        childName,
+        childGrade,
+        childSchool,
+        dailyCapMins,
+        initialWatchMins,
+      });
+      setCreatedChild(child);
+      setPairingInput(child.pairingCode);
+    } catch (err) {
+      setParentError(
+        err instanceof Error
+          ? 'Could not sync pairing code to cloud. Check your internet connection and retry.'
+          : 'Cloud sync failed. Please retry.'
+      );
+    } finally {
+      setIsSavingParent(false);
+    }
   };
 
   const handleCopyCode = (code: string) => {
@@ -91,14 +106,22 @@ export function SetupOnboardingModal({
     window.setTimeout(() => setCopied(false), 1800);
   };
 
-  const handleLearnerSubmit = (e: React.FormEvent) => {
+  const handleLearnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = onPairLearnerCode(pairingInput);
-    if (!res.success) {
-      setPairingError(res.message);
-    } else {
-      setPairingError('');
-      onClose();
+    if (isPairing) return;
+    setIsPairing(true);
+    setPairingError('');
+    try {
+      const res = await onPairLearnerCode(pairingInput);
+      if (!res.success) {
+        setPairingError(res.message);
+      } else {
+        onClose();
+      }
+    } catch {
+      setPairingError('Unable to reach cloud pairing service. Check internet connection and retry.');
+    } finally {
+      setIsPairing(false);
     }
   };
 
@@ -280,6 +303,12 @@ export function SetupOnboardingModal({
               </div>
             </div>
 
+            {parentError && (
+              <p className="text-xs font-semibold text-rose-600" role="alert">
+                {parentError}
+              </p>
+            )}
+
             <div className="flex items-center justify-between gap-3 pt-2">
               <button
                 type="button"
@@ -290,10 +319,15 @@ export function SetupOnboardingModal({
               </button>
               <button
                 type="submit"
-                className="flex min-h-[46px] items-center gap-2 rounded-2xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800"
+                disabled={isSavingParent}
+                className="flex min-h-[46px] items-center gap-2 rounded-2xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800 disabled:opacity-60"
               >
                 <UserCheck className="h-4 w-4" />
-                <span>Complete Registration &amp; Generate Code</span>
+                <span>
+                  {isSavingParent
+                    ? 'Saving & Syncing Code...'
+                    : 'Complete Registration & Generate Code'}
+                </span>
               </button>
             </div>
           </form>
@@ -415,10 +449,11 @@ export function SetupOnboardingModal({
               </button>
               <button
                 type="submit"
-                className="flex min-h-[48px] items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
+                disabled={isPairing}
+                className="flex min-h-[48px] items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-60"
               >
                 <Link2 className="h-4 w-4" />
-                <span>Pair Phone &amp; Start Background Guard</span>
+                <span>{isPairing ? 'Verifying Pairing Code...' : 'Pair Phone & Start Background Guard'}</span>
               </button>
             </div>
 

@@ -57,6 +57,8 @@ import com.somatime.app.ui.screens.SetupWizardScreen
 import com.somatime.app.ui.screens.TeacherPortalScreen
 import com.somatime.app.ui.theme.SomaTeal
 import com.somatime.app.ui.theme.SomaTimeTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 private sealed interface PinIntent {
     data class ExitHandOff(val targetRole: RoleView) : PinIntent
@@ -114,6 +116,13 @@ private fun SomaTimeRoot(store: SomaTimeStore) {
     LaunchedEffect(uiState.selectedChild.id, uiState.selectedChild.isPaired) {
         if (uiState.selectedChild.isPaired && !uiState.guardServiceRunning) {
             runCatching { ScreenTimeGuardService.start(context) }
+        }
+    }
+
+    LaunchedEffect(uiState.roleView, uiState.selectedChild.id) {
+        while (isActive) {
+            runCatching { store.syncPairedChildWithCloud() }
+            delay(6000L)
         }
     }
 
@@ -225,8 +234,8 @@ private fun SomaTimeRoot(store: SomaTimeStore) {
             if (uiState.showSetupWizard) {
                 SetupWizardScreen(
                     uiState = uiState,
-                    onRegisterParentAndChild = store::registerParentAndChild,
-                    onPairLearnerCode = store::pairLearnerByCode,
+                    onRegisterParentAndChild = store::registerParentAndChildAsync,
+                    onPairLearnerCode = store::pairLearnerByCodeAsync,
                     onDismiss = { store.setShowSetupWizard(false) }
                 )
             } else {

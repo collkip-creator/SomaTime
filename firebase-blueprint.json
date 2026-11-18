@@ -1,0 +1,186 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Public display identity for an authenticated SomaTime parent or teacher.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "role": {
+          "type": "string",
+          "enum": ["parent", "teacher"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["uid", "displayName", "role", "updatedAt"]
+    },
+    "UserPrivatePII": {
+      "title": "UserPrivatePII",
+      "description": "Private parent contact and PIN information isolated per authenticated user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "phoneContact": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "parentPin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 4,
+          "pattern": "^[0-9]{4}$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["uid", "parentPin", "updatedAt"]
+    },
+    "PairingSession": {
+      "title": "PairingSession",
+      "description": "Cross-device child pairing record keyed by secret pairing code (no parent PII).",
+      "type": "object",
+      "properties": {
+        "pairingCode": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 24,
+          "pattern": "^SOMA-[A-Z0-9]{4,12}$"
+        },
+        "childId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "childName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "grade": {
+          "type": "integer",
+          "description": "Kenyan CBC grade between 1 and 12"
+        },
+        "school": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "classStream": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "deviceMode": {
+          "type": "string",
+          "enum": ["own_phone", "hand_off"]
+        },
+        "parentPin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 4,
+          "pattern": "^[0-9]{4}$"
+        },
+        "dailyCapMins": {
+          "type": "integer"
+        },
+        "exchangeRateMins": {
+          "type": "integer"
+        },
+        "mandatorySubjects": {
+          "type": "array",
+          "description": "Up to 8 CBC learning area names"
+        },
+        "requireParentApproval": {
+          "type": "boolean"
+        },
+        "availableScreenSeconds": {
+          "type": "integer"
+        },
+        "usedScreenTodayMins": {
+          "type": "integer"
+        },
+        "learnedMinutesToday": {
+          "type": "integer"
+        },
+        "isLocked": {
+          "type": "boolean"
+        },
+        "isPaired": {
+          "type": "boolean"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "completedLessonIds": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "pairingCode",
+        "childId",
+        "childName",
+        "grade",
+        "school",
+        "deviceMode",
+        "parentPin",
+        "dailyCapMins",
+        "exchangeRateMins",
+        "mandatorySubjects",
+        "requireParentApproval",
+        "availableScreenSeconds",
+        "usedScreenTodayMins",
+        "learnedMinutesToday",
+        "isLocked",
+        "isPaired",
+        "ownerUid",
+        "completedLessonIds",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Authenticated user display profile."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivatePII" },
+      "description": "Private parent contact and PIN isolated from shared pairing records."
+    },
+    "/pairings/{pairingCode}": {
+      "schema": { "$ref": "#/entities/PairingSession" },
+      "description": "Cross-device child pairing and live screen-time sync session keyed by pairingCode."
+    }
+  }
+}

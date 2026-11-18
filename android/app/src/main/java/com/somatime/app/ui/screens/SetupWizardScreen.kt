@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,7 @@ import com.somatime.app.model.ChildProfile
 import com.somatime.app.ui.theme.SomaBlue
 import com.somatime.app.ui.theme.SomaEmerald
 import com.somatime.app.ui.theme.SomaTeal
+import kotlinx.coroutines.launch
 
 private enum class WizardStep {
     CHOICE,
@@ -72,7 +74,7 @@ private enum class WizardStep {
 @Composable
 fun SetupWizardScreen(
     uiState: SomaTimeUiState,
-    onRegisterParentAndChild: (
+    onRegisterParentAndChild: suspend (
         parentName: String,
         parentContact: String,
         parentPin: String,
@@ -82,10 +84,11 @@ fun SetupWizardScreen(
         dailyCapMins: Int,
         initialWatchMins: Int
     ) -> ChildProfile,
-    onPairLearnerCode: (String) -> PairingResult,
+    onPairLearnerCode: suspend (String) -> PairingResult,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var step by remember { mutableStateOf(WizardStep.CHOICE) }
 
     var parentName by remember { mutableStateOf(uiState.parentName) }
@@ -97,10 +100,12 @@ fun SetupWizardScreen(
     var dailyCapMins by remember { mutableIntStateOf(90) }
     var initialWatchMins by remember { mutableIntStateOf(5) }
     var formError by remember { mutableStateOf("") }
+    var isSavingParent by remember { mutableStateOf(false) }
     var generatedChild by remember { mutableStateOf<ChildProfile?>(null) }
 
     var pairingInput by remember { mutableStateOf("") }
     var pairingFeedback by remember { mutableStateOf("") }
+    var isPairingLearner by remember { mutableStateOf(false) }
 
     val hasUsageStats = UsageAccessHelper.hasUsageStatsPermission(context)
     val hasOverlay = UsageAccessHelper.canDrawOverlays(context)
@@ -333,6 +338,7 @@ fun SetupWizardScreen(
                                 }
                                 Button(
                                     onClick = {
+                                        if (isSavingParent) return@Button
                                         if (childName.trim().length < 2) {
                                             formError = "Please enter your child's full name."
                                             return@Button
@@ -342,24 +348,31 @@ fun SetupWizardScreen(
                                             return@Button
                                         }
                                         formError = ""
-                                        val created = onRegisterParentAndChild(
-                                            parentName,
-                                            parentContact,
-                                            parentPin,
-                                            childName,
-                                            childGrade,
-                                            childSchool,
-                                            dailyCapMins,
-                                            initialWatchMins
-                                        )
-                                        generatedChild = created
-                                        pairingInput = created.pairingCode
-                                        step = WizardStep.PARENT_DONE
+                                        isSavingParent = true
+                                        scope.launch {
+                                            val created = onRegisterParentAndChild(
+                                                parentName,
+                                                parentContact,
+                                                parentPin,
+                                                childName,
+                                                childGrade,
+                                                childSchool,
+                                                dailyCapMins,
+                                                initialWatchMins
+                                            )
+                                            generatedChild = created
+                                            pairingInput = created.pairingCode
+                                            isSavingParent = false
+                                            step = WizardStep.PARENT_DONE
+                                        }
                                     },
+                                    enabled = !isSavingParent,
                                     modifier = Modifier.weight(2f),
                                     colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
                                 ) {
-                                    Text("Complete & Generate Code")
+                                    Text(
+                                        if (isSavingParent) "Syncing to Cloud..." else "Complete & Generate Code"
+                                    )
                                 }
                             }
                         }
@@ -540,18 +553,27 @@ fun SetupWizardScreen(
                                 }
                                 Button(
                                     onClick = {
-                                        val res = onPairLearnerCode(pairingInput)
-                                        if (res.success) {
-                                            runCatching { ScreenTimeGuardService.start(context) }
-                                        } else {
-                                            pairingFeedback = res.message
+                                        if (isPairingLearner) return@Button
+                                        isPairingLearner = true
+                                        pairingFeedback = ""
+                                        scope.launch {
+                                            val res = onPairLearnerCode(pairingInput)
+                                            isPairingLearner = false
+                                            if (res.success) {
+                                                runCatching { ScreenTimeGuardService.start(context) }
+                                            } else {
+                                                pairingFeedback = res.message
+                                            }
                                         }
                                     },
+                                    enabled = !isPairingLearner,
                                     modifier = Modifier.weight(2f),
                                     colors = ButtonDefaults.buttonColors(containerColor = SomaEmerald)
                                 ) {
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Pair & Start Background Guard")
+                                    Text(
+                                        if (isPairingLearner) "Verifying Code..." else "Pair & Start Background Guard"
+                                    )
                                 }
                             }
                         }

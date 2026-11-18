@@ -162,7 +162,7 @@ export function ChildMode({
 
   const handleTapEntertainmentApp = (appName: string) => {
     if (isPhoneLocked) {
-      setLockNotice(`${appName} is locked. Complete a 5-min CBC activity or enter Parent PIN (1234).`);
+      setLockNotice(`${appName} is locked. Complete a 5-min CBC activity or enter Parent PIN (${parentPin}).`);
       return;
     }
     onSelectActiveApp(child.id, appName);

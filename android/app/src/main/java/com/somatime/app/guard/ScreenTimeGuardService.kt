@@ -55,8 +55,14 @@ class ScreenTimeGuardService : Service() {
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
             var takeoverTriggered = false
+            var tickCount = 0
             while (isActive) {
                 delay(1000L)
+                tickCount += 1
+                if (tickCount % 5 == 0) {
+                    runCatching { store.syncPairedChildWithCloud() }
+                }
+
                 val uiState = store.state.value
                 val child = uiState.selectedChild
                 val foregroundPkg = UsageAccessHelper.getForegroundPackageName(this@ScreenTimeGuardService)
