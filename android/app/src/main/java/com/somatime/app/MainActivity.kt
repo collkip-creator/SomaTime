@@ -53,6 +53,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.somatime.app.data.SetupWizardTab
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.guard.ScreenTimeGuardService
 import com.somatime.app.model.PendingApproval
@@ -273,6 +274,9 @@ private fun SomaTimeRoot(
         }
     }
 
+    val isLearnerLoggedIn = uiState.roleView == RoleView.CHILD &&
+        (uiState.selectedChild.isPaired || uiState.handOffActive)
+
     Scaffold(
         containerColor = Color(0xFFF8FAFC),
         topBar = {
@@ -291,61 +295,60 @@ private fun SomaTimeRoot(
                             fontWeight = FontWeight.ExtraBold,
                             color = SomaTeal
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (isTakeoverLocked) {
-                                        pinIntent = PinIntent.UnlockChild
-                                    } else {
-                                        store.setShowSetupWizard(true)
-                                    }
+                        if (isLearnerLoggedIn) {
+                            Text(
+                                "Learner · ${uiState.selectedChild.name.split(" ").first()} · Grade ${uiState.selectedChild.grade}",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = SomaTeal
+                            )
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedButton(
+                                    onClick = { store.setShowSetupWizard(true) }
+                                ) {
+                                    Icon(Icons.Rounded.Key, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Setup & Pair")
                                 }
-                            ) {
-                                Icon(Icons.Rounded.Key, contentDescription = null)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Setup & Pair")
-                            }
-                            IconButton(
-                                onClick = {
-                                    if (isTakeoverLocked) {
-                                        pinIntent = PinIntent.UnlockChild
-                                    } else {
-                                        store.resetDemo()
-                                    }
+                                IconButton(
+                                    onClick = { store.resetDemo() }
+                                ) {
+                                    Icon(Icons.Rounded.Refresh, contentDescription = "Reset Demo")
                                 }
-                            ) {
-                                Icon(Icons.Rounded.Refresh, contentDescription = "Reset Demo")
                             }
                         }
                     }
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        FilterChip(
-                            selected = uiState.roleView == RoleView.PARENT,
-                            onClick = { handleRoleSelect(RoleView.PARENT) },
-                            label = { Text("Parent") },
-                            leadingIcon = { Icon(Icons.Rounded.AdminPanelSettings, contentDescription = null) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = uiState.roleView == RoleView.CHILD,
-                            onClick = { handleRoleSelect(RoleView.CHILD) },
-                            label = { Text("Child") },
-                            leadingIcon = { Icon(Icons.Rounded.PhoneAndroid, contentDescription = null) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = uiState.roleView == RoleView.TEACHER,
-                            onClick = { handleRoleSelect(RoleView.TEACHER) },
-                            label = { Text("Teacher") },
-                            leadingIcon = { Icon(Icons.Rounded.School, contentDescription = null) },
-                            modifier = Modifier.weight(1f)
-                        )
+                    if (!isLearnerLoggedIn) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = uiState.roleView == RoleView.PARENT,
+                                onClick = { handleRoleSelect(RoleView.PARENT) },
+                                label = { Text("Parent") },
+                                leadingIcon = { Icon(Icons.Rounded.AdminPanelSettings, contentDescription = null) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = uiState.roleView == RoleView.CHILD,
+                                onClick = { handleRoleSelect(RoleView.CHILD) },
+                                label = { Text("Child") },
+                                leadingIcon = { Icon(Icons.Rounded.PhoneAndroid, contentDescription = null) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = uiState.roleView == RoleView.TEACHER,
+                                onClick = { handleRoleSelect(RoleView.TEACHER) },
+                                label = { Text("Teacher") },
+                                leadingIcon = { Icon(Icons.Rounded.School, contentDescription = null) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                     HorizontalDivider()
                 }
@@ -362,6 +365,8 @@ private fun SomaTimeRoot(
                     uiState = uiState,
                     onRegisterParentAndChild = store::registerParentAndChildAsync,
                     onPairLearnerCode = store::pairLearnerByCodeAsync,
+                    onRegisterTeacher = store::registerTeacherAsync,
+                    onLoginTeacher = store::loginTeacherAsync,
                     onRetryCloudSync = store::retryCloudSyncNow,
                     onDismiss = { store.setShowSetupWizard(false) }
                 )
@@ -410,12 +415,14 @@ private fun SomaTimeRoot(
                         onSimulateTimeExpired = store::simulateTimeExpired,
                         onOpenPinUnlock = { pinIntent = PinIntent.UnlockChild },
                         onOpenExitHandOff = { pinIntent = PinIntent.ExitHandOff(RoleView.PARENT) },
-                        onOpenSetupWizard = { store.setShowSetupWizard(true) },
+                        onOpenSetupWizard = { store.setShowSetupWizard(true, SetupWizardTab.LEARNER) },
                         onCompleteLesson = store::completeLesson
                     )
 
                     RoleView.TEACHER -> TeacherPortalScreen(
                         uiState = uiState,
+                        onOpenTeacherAuth = { store.setShowSetupWizard(true, SetupWizardTab.TEACHER) },
+                        onLogoutTeacher = store::logoutTeacher,
                         onPushAssignment = store::pushAssignment,
                         onPreviewChildMode = { store.setRoleView(RoleView.CHILD) }
                     )

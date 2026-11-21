@@ -16,7 +16,13 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import type { ChildProfile, DeviceMode, LearningArea } from '../types/somatime';
+import type {
+  ChildProfile,
+  DeviceMode,
+  LearningArea,
+  TeacherAccount,
+  TeacherAssignment,
+} from '../types/somatime';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -351,4 +357,272 @@ export async function savePrivateParentProfileToCloud(
 
 export async function signOutParent(): Promise<void> {
   await signOut(auth);
+}
+
+export function normalizeTeacherCode(raw: string): string {
+  const cleaned = raw.trim().toUpperCase().replace(/[^A-Z0-9-\s]/g, '');
+  if (!cleaned) return '';
+  const collapsed = cleaned.replace(/\s+/g, '-').replace(/-+/g, '-');
+  if (collapsed.startsWith('TCH-')) {
+    return collapsed.slice(0, 24);
+  }
+  if (collapsed.startsWith('TCH') && collapsed.length > 3) {
+    const rest = collapsed.slice(3).replace(/^-+/, '');
+    return `TCH-${rest}`.slice(0, 24);
+  }
+  if (/^[A-Z0-9]{4,12}$/.test(collapsed)) {
+    return `TCH-${collapsed}`.slice(0, 24);
+  }
+  return collapsed.slice(0, 24);
+}
+
+export function isValidTeacherCodeFormat(code: string): boolean {
+  return /^TCH-[A-Z0-9]{4,12}$/.test(code);
+}
+
+export function buildSchoolGradeKey(school: string, grade: number): string {
+  const safeGrade = clampInt(grade, 1, 12);
+  const slug = school
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100);
+  const finalSlug = slug.length >= 2 ? slug : 'nairobi-primary';
+  return `g${safeGrade}-${finalSlug}`;
+}
+
+export interface CloudTeacherDoc {
+  teacherCode: string;
+  fullName: string;
+  school: string;
+  tscNumber?: string;
+  teacherPin: string;
+  subjects: LearningArea[];
+  grade: number;
+  classStream: string;
+  ownerUid: string;
+  updatedAt: string;
+}
+
+export async function registerTeacherInCloud(
+  teacher: TeacherAccount
+): Promise<TeacherAccount> {
+  const code = normalizeTeacherCode(teacher.teacherCode);
+  if (!isValidTeacherCodeFormat(code)) {
+    throw new Error('Teacher code must follow format TCH-XXXX.');
+  }
+
+  const path = `teachers/${code}`;
+  const docRef = doc(db, 'teachers', code);
+  const uid = sanitizeId(auth.currentUser?.uid || 'device_teacher', 'device_teacher');
+  const safePin = sanitizePin(teacher.pin);
+  const safeSchool = (teacher.school.trim() || 'Nairobi Primary School').slice(0, 120);
+  const safeGrade = clampInt(teacher.grade, 1, 12);
+  const safeSubjects = (
+    teacher.subjects.length > 0 ? teacher.subjects : (['Mathematics'] as LearningArea[])
+  ).slice(0, 8) as LearningArea[];
+
+  const payload: CloudTeacherDoc = {
+    teacherCode: code,
+    fullName: (teacher.fullName.trim() || 'Teacher').slice(0, 80),
+    school: safeSchool,
+    tscNumber: teacher.tscNumber.trim().slice(0, 40),
+    teacherPin: safePin,
+    subjects: safeSubjects,
+    grade: safeGrade,
+    classStream: (teacher.classStream.trim() || `Grade ${safeGrade} East - ${safeSchool}`).slice(
+      0,
+      120
+    ),
+    ownerUid: uid,
+    updatedAt: new Date().toISOString().slice(0, 64),
+  };
+
+  try {
+    const existingSnap = await getDocFromServer(docRef);
+    if (!existingSnap.exists()) {
+      await setDoc(docRef, payload);
+    } else {
+      await updateDoc(docRef, {
+        fullName: payload.fullName,
+        school: payload.school,
+        tscNumber: payload.tscNumber,
+        teacherPin: payload.teacherPin,
+        subjects: payload.subjects,
+        grade: payload.grade,
+        classStream: payload.classStream,
+        updatedAt: payload.updatedAt,
+      });
+    }
+    return {
+      teacherCode: payload.teacherCode,
+      fullName: payload.fullName,
+      school: payload.school,
+      tscNumber: payload.tscNumber || '',
+      pin: payload.teacherPin,
+      subjects: payload.subjects,
+      grade: payload.grade,
+      classStream: payload.classStream,
+      registered: true,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function loginTeacherFromCloud(
+  rawCode: string,
+  rawPin: string
+): Promise<{ ok: boolean; teacher?: TeacherAccount; message: string }> {
+  const code = normalizeTeacherCode(rawCode);
+  const pin = rawPin.replace(/\D/g, '').slice(0, 4);
+  if (!isValidTeacherCodeFormat(code)) {
+    return { ok: false, message: 'Enter a valid Teacher Code like TCH-4821.' };
+  }
+  if (pin.length !== 4) {
+    return { ok: false, message: 'Enter your 4-digit Teacher PIN.' };
+  }
+
+  const path = `teachers/${code}`;
+  const docRef = doc(db, 'teachers', code);
+  let snap;
+  try {
+    snap = await getDocFromServer(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  if (!snap.exists()) {
+    return {
+      ok: false,
+      message: `No teacher account found for "${code}". Check the code or register as a new teacher.`,
+    };
+  }
+
+  const data = snap.data() as CloudTeacherDoc;
+  if (data.teacherPin !== pin) {
+    return { ok: false, message: 'Incorrect 4-digit Teacher PIN for this Teacher Code.' };
+  }
+
+  return {
+    ok: true,
+    message: `Signed in as ${data.fullName}`,
+    teacher: {
+      teacherCode: data.teacherCode,
+      fullName: data.fullName,
+      school: data.school,
+      tscNumber: data.tscNumber || '',
+      pin: data.teacherPin,
+      subjects: (data.subjects || ['Mathematics']) as LearningArea[],
+      grade: clampInt(data.grade, 1, 12),
+      classStream: data.classStream,
+      registered: true,
+    },
+  };
+}
+
+export async function publishSchoolGradeAssignmentToCloud(
+  assignment: TeacherAssignment,
+  schoolName: string
+): Promise<void> {
+  const safeSchool = (schoolName.trim() || assignment.school || 'Nairobi Primary School').slice(
+    0,
+    120
+  );
+  const safeGrade = clampInt(assignment.grade, 1, 12);
+  const schoolGradeKey = buildSchoolGradeKey(safeSchool, safeGrade);
+  const path = `school_assignments/${schoolGradeKey}`;
+  const docRef = doc(db, 'school_assignments', schoolGradeKey);
+
+  const cloudItem = {
+    id: assignment.id.slice(0, 80),
+    classStream: assignment.classStream.slice(0, 120),
+    school: safeSchool,
+    grade: safeGrade,
+    learningArea: assignment.learningArea,
+    strand: assignment.strand.slice(0, 120),
+    subStrand: assignment.subStrand.slice(0, 120),
+    lessonId: assignment.lessonId.slice(0, 80),
+    title: assignment.title.slice(0, 140),
+    teacherName: (assignment.teacherName || 'Teacher').slice(0, 80),
+    teacherCode: (assignment.teacherCode || 'TCH-0000').slice(0, 24),
+    dueLabel: assignment.dueLabel.slice(0, 80),
+    pushedAt: assignment.pushedAt.slice(0, 40),
+  };
+
+  try {
+    const existingSnap = await getDocFromServer(docRef);
+    const prevItems = existingSnap.exists()
+      ? ((existingSnap.data().recentAssignments as Array<Record<string, unknown>>) || [])
+      : [];
+    const nextItems = [
+      cloudItem,
+      ...prevItems.filter((item) => item.id !== cloudItem.id),
+    ].slice(0, 12);
+
+    const payload = {
+      schoolGradeKey,
+      school: safeSchool,
+      grade: safeGrade,
+      recentAssignments: nextItems,
+      updatedAt: new Date().toISOString().slice(0, 64),
+    };
+
+    if (!existingSnap.exists()) {
+      await setDoc(docRef, payload);
+    } else {
+      await updateDoc(docRef, {
+        school: payload.school,
+        recentAssignments: payload.recentAssignments,
+        updatedAt: payload.updatedAt,
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeSchoolGradeAssignments(
+  school: string,
+  grade: number,
+  onData: (assignments: TeacherAssignment[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  const key = buildSchoolGradeKey(school, grade);
+  const path = `school_assignments/${key}`;
+  const docRef = doc(db, 'school_assignments', key);
+
+  return onSnapshot(
+    docRef,
+    (snapshot) => {
+      if (!snapshot.exists()) return;
+      const rawList =
+        (snapshot.data().recentAssignments as Array<Record<string, unknown>>) || [];
+      const mapped: TeacherAssignment[] = rawList.map((item) => ({
+        id: String(item.id || `assign-${Date.now()}`),
+        classStream: String(item.classStream || `Grade ${grade} East`),
+        school: String(item.school || school),
+        grade: Number(item.grade || grade),
+        learningArea: String(item.learningArea || 'Mathematics') as LearningArea,
+        strand: String(item.strand || 'Numbers'),
+        subStrand: String(item.subStrand || 'Core Strand'),
+        lessonId: String(item.lessonId || 'g4-math-fractions'),
+        title: String(item.title || 'Teacher Priority Assignment'),
+        teacherName: item.teacherName ? String(item.teacherName) : undefined,
+        teacherCode: item.teacherCode ? String(item.teacherCode) : undefined,
+        dueLabel: String(item.dueLabel || 'Priority · Before Screen Time'),
+        pushedAt: String(item.pushedAt || 'Today'),
+        completedByChildIds: [],
+      }));
+      onData(mapped);
+    },
+    (error) => {
+      if (onError) {
+        onError(error);
+      } else {
+        handleFirestoreError(error, OperationType.GET, path);
+      }
+    }
+  );
 }

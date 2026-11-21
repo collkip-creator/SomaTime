@@ -14,9 +14,9 @@ import {
   X,
 } from 'lucide-react';
 import {
-  ALL_LEARNING_AREAS,
   CBC_RUBRIC_META,
   getLevelGroupForGrade,
+  getSubjectsForGrade,
 } from '../data/cbcCurriculum';
 import { formatTimeClock } from '../hooks/useSomaTimeStore';
 import type { ChildProfile, DeviceMode, LearningArea, PendingApproval } from '../types/somatime';
@@ -443,7 +443,12 @@ export function ParentDashboard({
                 Child must complete at least one selected subject before unlocking free-choice CBC areas.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                {ALL_LEARNING_AREAS.map((area) => {
+                {Array.from(
+                  new Set([
+                    ...getSubjectsForGrade(selectedChild.grade),
+                    ...selectedChild.mandatorySubjects,
+                  ])
+                ).map((area) => {
                   const selected = selectedChild.mandatorySubjects.includes(area);
                   return (
                     <button

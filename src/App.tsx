@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChildMode } from './components/ChildMode';
 import { ParentDashboard } from './components/ParentDashboard';
 import { PinModal } from './components/PinModal';
-import { SetupOnboardingModal } from './components/SetupOnboardingModal';
+import { SetupOnboardingModal, type SetupModalTab } from './components/SetupOnboardingModal';
 import { TeacherPortal } from './components/TeacherPortal';
 import { TopDemoBar } from './components/TopDemoBar';
 import { useSomaTimeStore } from './hooks/useSomaTimeStore';
@@ -18,7 +18,7 @@ export default function App() {
   const store = useSomaTimeStore();
   const [pinIntent, setPinIntent] = useState<PinIntent>(null);
   const [setupOpen, setSetupOpen] = useState(false);
-  const [setupInitialTab, setSetupInitialTab] = useState<'choice' | 'parent' | 'learner'>('choice');
+  const [setupInitialTab, setSetupInitialTab] = useState<SetupModalTab>('choice');
 
   const handleSelectRole = (nextRole: RoleView) => {
     if (store.handOffActive && store.roleView === 'child' && nextRole !== 'child') {
@@ -28,7 +28,7 @@ export default function App() {
     store.setRoleView(nextRole);
   };
 
-  const openSetup = (tab: 'choice' | 'parent' | 'learner') => {
+  const openSetup = (tab: SetupModalTab) => {
     setSetupInitialTab(tab);
     setSetupOpen(true);
   };
@@ -132,8 +132,11 @@ export default function App() {
 
       {store.roleView === 'teacher' && (
         <TeacherPortal
+          teacherAccount={store.teacherAccount}
           assignments={store.assignments}
           classRoster={store.classRoster}
+          onOpenTeacherAuth={() => openSetup('teacher')}
+          onLogoutTeacher={store.logoutTeacher}
           onPushAssignment={store.pushTeacherAssignment}
           onJumpToChildMode={() => store.setRoleView('child')}
         />
@@ -157,8 +160,11 @@ export default function App() {
         defaultParentContact={store.parentAccount.contact}
         defaultParentPin={store.parentAccount.pin}
         childrenList={store.children}
+        registeredTeachers={store.registeredTeachers}
         onRegisterParentAndChild={store.registerParentAndChild}
         onPairLearnerCode={store.pairLearnerByCode}
+        onRegisterTeacher={store.registerTeacher}
+        onLoginTeacher={store.loginTeacher}
         onClose={() => setSetupOpen(false)}
       />
     </div>

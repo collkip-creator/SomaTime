@@ -134,6 +134,57 @@ service cloud.firestore {
       ]);
     }
 
+    function isValidTeacherCodeId(code) {
+      return code is string
+        && code.size() >= 6
+        && code.size() <= 24
+        && code.matches('^TCH-[A-Z0-9]{4,12}$');
+    }
+
+    function isValidSchoolGradeId(key) {
+      return key is string
+        && key.size() >= 4
+        && key.size() <= 128
+        && key.matches('^g([1-9]|1[0-2])-[a-z0-9\\-]{2,110}$');
+    }
+
+    function isValidTeacherProfile(data) {
+      return data.keys().hasAll([
+          'teacherCode', 'fullName', 'school', 'teacherPin',
+          'subjects', 'grade', 'classStream', 'ownerUid', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'teacherCode', 'fullName', 'school', 'tscNumber', 'teacherPin',
+          'subjects', 'grade', 'classStream', 'ownerUid', 'updatedAt'
+        ])
+        && isValidTeacherCodeId(data.teacherCode)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 80
+        && data.school is string && data.school.size() >= 2 && data.school.size() <= 120
+        && (!('tscNumber' in data) || (data.tscNumber is string && data.tscNumber.size() <= 40))
+        && data.teacherPin is string && data.teacherPin.matches('^[0-9]{4}$')
+        && data.subjects is list && data.subjects.size() >= 1 && data.subjects.size() <= 8
+        && data.subjects[0] is string
+        && data.grade is int && data.grade >= 1 && data.grade <= 12
+        && data.classStream is string && data.classStream.size() >= 2 && data.classStream.size() <= 120
+        && isValidId(data.ownerUid)
+        && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidSchoolAssignments(data) {
+      return data.keys().hasAll([
+          'schoolGradeKey', 'school', 'grade', 'recentAssignments', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'schoolGradeKey', 'school', 'grade', 'recentAssignments', 'updatedAt'
+        ])
+        && isValidSchoolGradeId(data.schoolGradeKey)
+        && data.school is string && data.school.size() >= 2 && data.school.size() <= 120
+        && data.grade is int && data.grade >= 1 && data.grade <= 12
+        && data.recentAssignments is list && data.recentAssignments.size() <= 12
+        && (data.recentAssignments.size() == 0 || data.recentAssignments[0] is map)
+        && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
     match /test/connection {
       allow get: if true;
     }
@@ -175,6 +226,41 @@ service cloud.firestore {
       allow delete: if isValidPairingCodeId(pairingCode)
         && isSignedIn()
         && existing().ownerUid == request.auth.uid;
+    }
+
+    match /teachers/{teacherCode} {
+      // Prevent listing/scraping teacher accounts; lookup only by exact Teacher Code
+      allow list: if false;
+      allow get: if isValidTeacherCodeId(teacherCode);
+      allow create: if isValidTeacherCodeId(teacherCode)
+        && isValidTeacherProfile(incoming())
+        && incoming().teacherCode == teacherCode;
+      allow update: if isValidTeacherCodeId(teacherCode)
+        && isValidTeacherProfile(incoming())
+        && incoming().teacherCode == existing().teacherCode
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'fullName', 'school', 'tscNumber', 'teacherPin',
+          'subjects', 'grade', 'classStream', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /school_assignments/{schoolGradeKey} {
+      // Deterministic school+grade key prevents open collection listing
+      allow list: if false;
+      allow get: if isValidSchoolGradeId(schoolGradeKey);
+      allow create: if isValidSchoolGradeId(schoolGradeKey)
+        && isValidSchoolAssignments(incoming())
+        && incoming().schoolGradeKey == schoolGradeKey;
+      allow update: if isValidSchoolGradeId(schoolGradeKey)
+        && isValidSchoolAssignments(incoming())
+        && incoming().schoolGradeKey == existing().schoolGradeKey
+        && incoming().grade == existing().grade
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'school', 'recentAssignments', 'updatedAt'
+        ]);
+      allow delete: if false;
     }
   }
 }

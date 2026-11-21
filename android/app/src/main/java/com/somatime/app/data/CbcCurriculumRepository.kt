@@ -3,6 +3,7 @@ package com.somatime.app.data
 import com.somatime.app.model.CBCLesson
 import com.somatime.app.model.CBCRubric
 import com.somatime.app.model.CbcCatalogEntry
+import com.somatime.app.model.CbcStrandNode
 import com.somatime.app.model.ChildActivityLog
 import com.somatime.app.model.ChildProfile
 import com.somatime.app.model.ClassStudentRecord
@@ -250,23 +251,369 @@ object CbcCurriculumRepository {
                     explanation = "3x = 450, so x = 450 / 3 = KES 150."
                 )
             )
+        ),
+        CBCLesson(
+            id = "g1-math-coins",
+            title = "Counting & Kenyan Shilling Coins",
+            grade = 1,
+            levelGroup = "Lower Primary",
+            learningArea = LearningArea.MATHEMATICS,
+            strand = "Numbers",
+            subStrand = "Whole Numbers & KES Coins",
+            durationMins = 5,
+            summary = "Count objects up to 20 and recognize KES 1, KES 5, KES 10, and KES 20 coins.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g1-m-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "Amina has two KES 5 coins in her pocket. How much money does she have altogether?",
+                    hint = "Hint: Add 5 + 5 together.",
+                    options = listOf("KES 10", "KES 5", "KES 15", "KES 20"),
+                    correctAnswer = "KES 10",
+                    explanation = "Well done! KES 5 + KES 5 = KES 10."
+                ),
+                QuizQuestion(
+                    id = "g1-m-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each counting group to the right total.",
+                    hint = "Hint: Count carefully in ones and tens.",
+                    pairs = listOf(
+                        MatchingPair("4 mangoes + 3 mangoes", "7 mangoes"),
+                        MatchingPair("10 pencils + 2 pencils", "12 pencils"),
+                        MatchingPair("9 books - 4 books", "5 books")
+                    ),
+                    explanation = "Awesome counting! You solved all three sums accurately."
+                ),
+                QuizQuestion(
+                    id = "g1-m-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "Count forward by 1: 14, 15, 16, ________.",
+                    hint = "Hint: The number right after 16.",
+                    blankPrefix = "Next number:",
+                    blankSuffix = "",
+                    correctAnswer = "17",
+                    acceptableAnswers = listOf("17", "seventeen"),
+                    explanation = "Correct! 17 comes right after 16."
+                )
+            )
+        ),
+        CBCLesson(
+            id = "g3-math-measurement",
+            title = "Kenyan Time, Mass & Metres",
+            grade = 3,
+            levelGroup = "Lower Primary",
+            learningArea = LearningArea.MATHEMATICS,
+            strand = "Measurement",
+            subStrand = "Length, Mass & Clock Time",
+            durationMins = 5,
+            summary = "Measure classroom lengths in metres, market produce in kilograms, and read hours.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g3-m-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "A shopkeeper weighs 2 kg of maize flour and 3 kg of beans in Nakuru. What is the total mass?",
+                    hint = "Hint: Add 2 kg and 3 kg.",
+                    options = listOf("5 kg", "6 kg", "1 kg", "4 kg"),
+                    correctAnswer = "5 kg",
+                    explanation = "Great! 2 kg + 3 kg = 5 kg."
+                ),
+                QuizQuestion(
+                    id = "g3-m-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each item to its best Kenyan CBC measurement unit.",
+                    hint = "Hint: Sugar is weighed in kg; milk in litres; cloth in metres.",
+                    pairs = listOf(
+                        MatchingPair("Packet of sugar", "Kilograms (kg)"),
+                        MatchingPair("Bottle of milk", "Litres (L)"),
+                        MatchingPair("Classroom wall", "Metres (m)")
+                    ),
+                    explanation = "Spot on! You picked the right metric units."
+                ),
+                QuizQuestion(
+                    id = "g3-m-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "How many minutes are in 1 full hour?",
+                    hint = "Hint: A clock face has 60 small minute steps.",
+                    blankPrefix = "1 hour =",
+                    blankSuffix = "minutes",
+                    correctAnswer = "60",
+                    acceptableAnswers = listOf("60", "sixty"),
+                    explanation = "Correct! There are 60 minutes in 1 hour."
+                )
+            )
+        ),
+        CBCLesson(
+            id = "g5-math-decimals",
+            title = "Decimals & Market Change (KES)",
+            grade = 5,
+            levelGroup = "Upper Primary",
+            learningArea = LearningArea.MATHEMATICS,
+            strand = "Numbers",
+            subStrand = "Decimals in Shopping",
+            durationMins = 5,
+            summary = "Add and subtract decimals up to 2 decimal places using Kenyan retail prices.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g5-m-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "A loaf of bread costs KES 65.50 and milk costs KES 60.00. What is the total bill?",
+                    hint = "Hint: Add 65 + 60, then keep .50.",
+                    options = listOf("KES 125.50", "KES 120.50", "KES 135.50", "KES 115.50"),
+                    correctAnswer = "KES 125.50",
+                    explanation = "Correct! 65.50 + 60.00 = KES 125.50."
+                ),
+                QuizQuestion(
+                    id = "g5-m-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each fraction to its decimal equivalent.",
+                    hint = "Hint: Divide the top number by 10 or 100.",
+                    pairs = listOf(
+                        MatchingPair("1/2", "0.5"),
+                        MatchingPair("1/4", "0.25"),
+                        MatchingPair("3/10", "0.3")
+                    ),
+                    explanation = "Great work converting fractions to decimals!"
+                ),
+                QuizQuestion(
+                    id = "g5-m-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "Evaluate: 4.75 + 1.25 = ________.",
+                    hint = "Hint: 0.75 + 0.25 makes 1 whole.",
+                    blankPrefix = "Answer:",
+                    blankSuffix = "",
+                    correctAnswer = "6",
+                    acceptableAnswers = listOf("6", "6.0", "6.00"),
+                    explanation = "Well done! 4.75 + 1.25 = 6.00."
+                )
+            )
+        ),
+        CBCLesson(
+            id = "g9-sci-ecosystems",
+            title = "Kenyan Ecosystems & Conservation",
+            grade = 9,
+            levelGroup = "Junior School",
+            learningArea = LearningArea.INTEGRATED_SCIENCE,
+            strand = "Living Things & Environment",
+            subStrand = "Food Webs & Biodiversity",
+            durationMins = 5,
+            summary = "Analyze savanna food chains, trophic levels, and wetland conservation in Kenya.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g9-s-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "In a Maasai Mara savanna food chain (Acacia -> Giraffe -> Lion), what role does the Acacia tree play?",
+                    hint = "Hint: Plants make food from sunlight using photosynthesis.",
+                    options = listOf("Producer", "Primary consumer", "Secondary consumer", "Decomposer"),
+                    correctAnswer = "Producer",
+                    explanation = "Correct! Green plants are producers because they convert sunlight into energy."
+                ),
+                QuizQuestion(
+                    id = "g9-s-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each Kenyan ecosystem organism to its trophic role.",
+                    hint = "Hint: Herbivores eat plants; fungi recycle dead matter.",
+                    pairs = listOf(
+                        MatchingPair("Savanna Grass", "Producer"),
+                        MatchingPair("Zebra", "Primary Consumer"),
+                        MatchingPair("Soil Bacteria & Fungi", "Decomposer")
+                    ),
+                    explanation = "Great job! Every trophic level keeps the savanna balanced."
+                ),
+                QuizQuestion(
+                    id = "g9-s-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "The process by which green leaves use sunlight and water to make glucose is called ________.",
+                    hint = "Hint: Starts with photo-.",
+                    blankPrefix = "Process:",
+                    blankSuffix = "",
+                    correctAnswer = "Photosynthesis",
+                    acceptableAnswers = listOf("photosynthesis"),
+                    explanation = "Accurate! Photosynthesis produces glucose and oxygen."
+                )
+            )
+        ),
+        CBCLesson(
+            id = "g10-stem-energy",
+            title = "Geothermal Energy in Olkaria",
+            grade = 10,
+            levelGroup = "Senior School",
+            learningArea = LearningArea.INTEGRATED_SCIENCE,
+            strand = "Energy & Sustainability",
+            subStrand = "Renewable Power Systems",
+            durationMins = 5,
+            summary = "Analyze how Kenya's Rift Valley geothermal plants convert underground heat into electricity.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g10-st-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "Which energy transformation occurs inside an Olkaria geothermal power station?",
+                    hint = "Hint: Underground heat boils water into steam, turning turbines to generate electricity.",
+                    options = listOf(
+                        "Thermal -> Mechanical -> Electrical",
+                        "Chemical -> Light -> Sound",
+                        "Solar -> Nuclear -> Thermal",
+                        "Elastic -> Potential -> Chemical"
+                    ),
+                    correctAnswer = "Thermal -> Mechanical -> Electrical",
+                    explanation = "Accurate! Thermal steam turns turbines (mechanical), driving generators (electrical)."
+                ),
+                QuizQuestion(
+                    id = "g10-st-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each Kenyan clean energy source to its primary location.",
+                    hint = "Hint: Olkaria is near Naivasha; Seven Forks is on Tana River.",
+                    pairs = listOf(
+                        MatchingPair("Geothermal Steam", "Olkaria, Naivasha"),
+                        MatchingPair("Wind Turbines", "Lake Turkana Wind Power"),
+                        MatchingPair("Hydroelectric Dams", "Seven Forks (Tana River)")
+                    ),
+                    explanation = "Excellent Senior School STEM mastery!"
+                ),
+                QuizQuestion(
+                    id = "g10-st-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "The rotating machine pushed by high-pressure steam inside a power plant is called a ________.",
+                    hint = "Hint: Starts with the letter T.",
+                    blankPrefix = "Component:",
+                    blankSuffix = "",
+                    correctAnswer = "Turbine",
+                    acceptableAnswers = listOf("turbine", "steam turbine"),
+                    explanation = "Correct! High-pressure steam spins the turbine blades."
+                )
+            )
+        ),
+        CBCLesson(
+            id = "g11-math-finance",
+            title = "SACCO Savings & Compound Interest",
+            grade = 11,
+            levelGroup = "Senior School",
+            learningArea = LearningArea.MATHEMATICS,
+            strand = "Commercial Arithmetic",
+            subStrand = "Compound Interest & Appreciation",
+            durationMins = 5,
+            summary = "Model Kenyan SACCO savings growth using compound interest formulas.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g11-m-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "KES 10,000 is saved at 10% p.a. compound interest for 2 years. What is the final amount?",
+                    hint = "Hint: Year 1 = 11,000; Year 2 adds 10% of 11,000.",
+                    options = listOf("KES 12,100", "KES 12,000", "KES 11,100", "KES 12,500"),
+                    correctAnswer = "KES 12,100",
+                    explanation = "Correct! 10,000 x (1.1)^2 = KES 12,100."
+                ),
+                QuizQuestion(
+                    id = "g11-m-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each financial term to its Kenyan CBC meaning.",
+                    hint = "Hint: Principal is starting cash; Appreciation means rising value.",
+                    pairs = listOf(
+                        MatchingPair("Principal (P)", "Initial amount invested or borrowed"),
+                        MatchingPair("Appreciation", "Increase in asset value over time"),
+                        MatchingPair("Depreciation", "Decrease in asset value over time")
+                    ),
+                    explanation = "Excellent mastery of commercial arithmetic!"
+                ),
+                QuizQuestion(
+                    id = "g11-m-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "How much compound interest alone was earned on KES 10,000 if the final amount is KES 12,100?",
+                    hint = "Hint: Interest = Amount - Principal.",
+                    blankPrefix = "Interest: KES",
+                    blankSuffix = "",
+                    correctAnswer = "2100",
+                    acceptableAnswers = listOf("2100", "2,100", "kes 2100"),
+                    explanation = "Spot on! 12,100 - 10,000 = KES 2,100."
+                )
+            )
+        ),
+        CBCLesson(
+            id = "g12-sci-genetics",
+            title = "Biotechnology & Drought-Tolerant Crops",
+            grade = 12,
+            levelGroup = "Senior School",
+            learningArea = LearningArea.INTEGRATED_SCIENCE,
+            strand = "Genetics & Biotechnology",
+            subStrand = "Selective Breeding & Food Security",
+            durationMins = 5,
+            summary = "Examine how KALRO research improves maize and sorghum resilience across Kenyan climates.",
+            questions = listOf(
+                QuizQuestion(
+                    id = "g12-s-1",
+                    type = QuestionType.MULTIPLE_CHOICE,
+                    prompt = "Why do Kenyan researchers breed drought-tolerant maize varieties for semi-arid counties?",
+                    hint = "Hint: Think about reliable harvests when rainfall is low.",
+                    options = listOf(
+                        "To improve food security during erratic rainfall",
+                        "To increase soil erosion",
+                        "To eliminate pollination",
+                        "To stop photosynthesis"
+                    ),
+                    correctAnswer = "To improve food security during erratic rainfall",
+                    explanation = "Accurate! Drought-tolerant traits protect harvests in ASAL regions."
+                ),
+                QuizQuestion(
+                    id = "g12-s-2",
+                    type = QuestionType.MATCHING,
+                    prompt = "Match each genetics concept to its definition.",
+                    hint = "Hint: DNA carries genetic code; phenotype is the observable trait.",
+                    pairs = listOf(
+                        MatchingPair("Genotype", "Genetic makeup of an organism"),
+                        MatchingPair("Phenotype", "Observable physical characteristics"),
+                        MatchingPair("DNA", "Molecule carrying hereditary instructions")
+                    ),
+                    explanation = "Well done! Clear understanding of genetics and biotechnology."
+                ),
+                QuizQuestion(
+                    id = "g12-s-3",
+                    type = QuestionType.FILL_BLANK,
+                    prompt = "In Kenya, the national agricultural research body developing resilient seeds is abbreviated ________.",
+                    hint = "Hint: Kenya Agricultural and Livestock Research Organization (5 letters).",
+                    blankPrefix = "Organization:",
+                    blankSuffix = "",
+                    correctAnswer = "KALRO",
+                    acceptableAnswers = listOf("kalro"),
+                    explanation = "Correct! KALRO leads agricultural research in Kenya."
+                )
+            )
         )
+    ) + CbcCurriculumCatalog.extraLessons
+
+    val catalog: List<CbcCatalogEntry> by lazy {
+        CbcCurriculumCatalog.buildFullCatalog()
+    }
+
+    data class SubjectStrandOption(
+        val strand: String,
+        val subStrand: String,
+        val levelHint: String
     )
 
-    val catalog: List<CbcCatalogEntry> = listOf(
-        CbcCatalogEntry(1, "Lower Primary", null, LearningArea.ENGLISH, "Listening & Speaking", "Polite Expressions", "g4-math-fractions"),
-        CbcCatalogEntry(2, "Lower Primary", null, LearningArea.KISWAHILI, "Kusikiliza na Kuzungumza", "Msamiati wa Nyumbani", "g2-kisw-msamiati"),
-        CbcCatalogEntry(3, "Lower Primary", null, LearningArea.CREATIVE_ARTS, "Performing & Visual Arts", "Kenyan Folk Songs & Rhythm", "g2-kisw-msamiati"),
-        CbcCatalogEntry(4, "Upper Primary", null, LearningArea.MATHEMATICS, "Numbers", "Fractions in Daily Life", "g4-math-fractions"),
-        CbcCatalogEntry(5, "Upper Primary", null, LearningArea.AGRICULTURE_NUTRITION, "Conservation of Resources", "Organic Compost & Sack Gardens", "g6-sst-resources"),
-        CbcCatalogEntry(6, "Upper Primary", null, LearningArea.SOCIAL_STUDIES, "Resources & Economic Activities", "Cash Crops & Port Trade", "g6-sst-resources"),
-        CbcCatalogEntry(7, "Junior School", null, LearningArea.INTEGRATED_SCIENCE, "Scientific Investigation", "Laboratory Apparatus & Instruments", "g7-sci-apparatus"),
-        CbcCatalogEntry(8, "Junior School", null, LearningArea.MATHEMATICS, "Algebra", "Linear Equations in One Unknown", "g8-math-algebra"),
-        CbcCatalogEntry(9, "Junior School", null, LearningArea.SOCIAL_STUDIES, "Citizenship & Governance", "Kenyan Constitution & Devolution", "g6-sst-resources"),
-        CbcCatalogEntry(10, "Senior School", "STEM Pathway", LearningArea.INTEGRATED_SCIENCE, "Energy & Sustainability", "Renewable Power Systems", "g7-sci-apparatus"),
-        CbcCatalogEntry(11, "Senior School", "Social Sciences Pathway", LearningArea.SOCIAL_STUDIES, "Regional Integration", "East African Community Trade", "g6-sst-resources"),
-        CbcCatalogEntry(12, "Senior School", "Arts & Sports Science", LearningArea.CREATIVE_ARTS, "Digital Media & Design", "Kenyan Cultural Visual Storytelling", "g4-math-fractions")
-    )
+    fun subjectsForGrade(grade: Int): List<LearningArea> =
+        CbcCurriculumCatalog.subjectsForGrade(grade)
+
+    fun groupedStrandsForArea(area: LearningArea, gradeFilter: Int? = null): List<CbcStrandNode> =
+        CbcCurriculumCatalog.strandsForSubject(area, gradeFilter)
+
+    fun strandsForArea(area: LearningArea): List<SubjectStrandOption> =
+        CbcCurriculumCatalog.strandsForSubject(area).flatMap { st ->
+            st.subStrands.map { sub ->
+                SubjectStrandOption(
+                    strand = st.strand,
+                    subStrand = sub.subStrand,
+                    levelHint = sub.levelHint
+                )
+            }
+        }
+
+    fun curriculumStats(): Triple<Int, Int, Int> {
+        val subjects = CbcCurriculumCatalog.curriculumTree.size
+        val strands = CbcCurriculumCatalog.curriculumTree.sumOf { it.strands.size }
+        val subStrands = CbcCurriculumCatalog.curriculumTree.sumOf { subj ->
+            subj.strands.sumOf { it.subStrands.size }
+        }
+        return Triple(subjects, strands, subStrands)
+    }
 
     val classStreams = listOf(
         "Grade 6 East - Nairobi Primary",
@@ -277,6 +624,11 @@ object CbcCurriculumRepository {
     fun generatePairingCode(): String {
         val num = (1000..9999).random()
         return "SOMA-$num"
+    }
+
+    fun generateTeacherCode(): String {
+        val num = (1000..9999).random()
+        return "TCH-$num"
     }
 
     fun initialChildren(): List<ChildProfile> = listOf(

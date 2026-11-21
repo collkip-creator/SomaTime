@@ -11,6 +11,7 @@ import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
 import com.somatime.app.model.PendingApproval
 import com.somatime.app.model.RoleView
+import com.somatime.app.model.TeacherAccount
 import com.somatime.app.model.TeacherAssignment
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -26,6 +27,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class LessonCompletionResult(
     val minutesEarned: Int,
@@ -40,6 +43,19 @@ data class PairingResult(
     val message: String
 )
 
+data class TeacherLoginResult(
+    val success: Boolean,
+    val teacher: TeacherAccount? = null,
+    val message: String
+)
+
+enum class SetupWizardTab {
+    CHOICE,
+    PARENT,
+    LEARNER,
+    TEACHER
+}
+
 data class SomaTimeUiState(
     val roleView: RoleView = RoleView.PARENT,
     val selectedChildId: String = "amina",
@@ -47,7 +63,10 @@ data class SomaTimeUiState(
     val parentName: String = "Grace Wanjiku",
     val parentContact: String = "0712 345 678",
     val parentPin: String = CbcCurriculumRepository.PARENT_PIN,
+    val teacherAccount: TeacherAccount? = null,
+    val registeredTeachers: List<TeacherAccount> = emptyList(),
     val showSetupWizard: Boolean = false,
+    val setupInitialTab: SetupWizardTab = SetupWizardTab.CHOICE,
     val guardServiceRunning: Boolean = false,
     val cloudSyncOk: Boolean = false,
     val cloudSyncMessage: String = "Syncing pairing codes to Cloud...",
@@ -174,6 +193,9 @@ class SomaTimeStore private constructor(context: Context) {
         }
 
         val allChildren = restoredCustom + restoredBase
+        val registeredTeachers = decodeTeachers(prefs.getString("registered_teachers_json", null))
+        val activeTeacherCode = prefs.getString("active_teacher_code", null)
+        val activeTeacher = registeredTeachers.firstOrNull { it.teacherCode == activeTeacherCode }
 
         return base.copy(
             roleView = savedRole,
@@ -182,8 +204,62 @@ class SomaTimeStore private constructor(context: Context) {
             parentName = parentName,
             parentContact = parentContact,
             parentPin = parentPin,
+            teacherAccount = activeTeacher,
+            registeredTeachers = registeredTeachers,
             children = allChildren
         )
+    }
+
+    private fun decodeTeachers(rawJson: String?): List<TeacherAccount> {
+        if (rawJson.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(rawJson)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val subjArr = o.optJSONArray("subjects")
+                    val subjects = buildList {
+                        if (subjArr != null) {
+                            for (j in 0 until subjArr.length()) {
+                                val name = subjArr.optString(j)
+                                LearningArea.entries.firstOrNull { it.displayName == name }?.let(::add)
+                            }
+                        }
+                    }.ifEmpty { listOf(LearningArea.MATHEMATICS) }
+                    add(
+                        TeacherAccount(
+                            teacherCode = o.optString("teacherCode"),
+                            fullName = o.optString("fullName"),
+                            school = o.optString("school", "Nairobi Primary School"),
+                            tscNumber = o.optString("tscNumber", ""),
+                            pin = o.optString("pin", "1234"),
+                            subjects = subjects,
+                            grade = o.optInt("grade", 6).coerceIn(1, 12),
+                            classStream = o.optString("classStream", "Grade 6 East")
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeTeachers(list: List<TeacherAccount>): String {
+        val arr = JSONArray()
+        list.forEach { t ->
+            val subjArr = JSONArray().apply { t.subjects.forEach { put(it.displayName) } }
+            arr.put(
+                JSONObject()
+                    .put("teacherCode", t.teacherCode)
+                    .put("fullName", t.fullName)
+                    .put("school", t.school)
+                    .put("tscNumber", t.tscNumber)
+                    .put("pin", t.pin)
+                    .put("subjects", subjArr)
+                    .put("grade", t.grade)
+                    .put("classStream", t.classStream)
+            )
+        }
+        return arr.toString()
     }
 
     private fun persistState(s: SomaTimeUiState) {
@@ -197,6 +273,8 @@ class SomaTimeStore private constructor(context: Context) {
         editor.putString("parent_name", s.parentName)
         editor.putString("parent_contact", s.parentContact)
         editor.putString("parent_pin", s.parentPin)
+        editor.putString("active_teacher_code", s.teacherAccount?.teacherCode)
+        editor.putString("registered_teachers_json", encodeTeachers(s.registeredTeachers))
         s.children.forEach { c ->
             val prefix = "child_${c.id}_"
             editor.putString("${prefix}name", c.name)
@@ -257,8 +335,13 @@ class SomaTimeStore private constructor(context: Context) {
         }
     }
 
-    fun setShowSetupWizard(show: Boolean) {
-        _state.update { it.copy(showSetupWizard = show) }
+    fun setShowSetupWizard(show: Boolean, initialTab: SetupWizardTab = SetupWizardTab.CHOICE) {
+        _state.update {
+            it.copy(
+                showSetupWizard = show,
+                setupInitialTab = if (show) initialTab else SetupWizardTab.CHOICE
+            )
+        }
     }
 
     fun setRoleView(role: RoleView) {
@@ -556,6 +639,22 @@ class SomaTimeStore private constructor(context: Context) {
                 ).also(::persistState)
             }
         }
+
+        // Also fetch teacher assignments pushed for this learner's school and grade
+        val assignRes = FirestoreSyncClient.fetchSchoolGradeAssignments(child.school, child.grade)
+        val cloudAssignments = assignRes.data
+        if (assignRes.ok && !cloudAssignments.isNullOrEmpty()) {
+            _state.update { s ->
+                val existingMap = s.assignments.associateBy { it.id }
+                val mergedCloud = cloudAssignments.map { ca ->
+                    val prev = existingMap[ca.id]
+                    if (prev != null) ca.copy(completedByChildIds = prev.completedByChildIds) else ca
+                }
+                val cloudIds = mergedCloud.map { it.id }.toSet()
+                val remaining = s.assignments.filterNot { it.id in cloudIds }
+                s.copy(assignments = mergedCloud + remaining).also(::persistState)
+            }
+        }
     }
 
     fun addChild(name: String, grade: Int, school: String) {
@@ -780,32 +879,135 @@ class SomaTimeStore private constructor(context: Context) {
         }
     }
 
+    suspend fun registerTeacherAsync(
+        fullName: String,
+        school: String,
+        tscNumber: String,
+        pin: String,
+        subjects: List<LearningArea>,
+        grade: Int,
+        classStream: String
+    ): TeacherAccount {
+        val code = CbcCurriculumRepository.generateTeacherCode()
+        val safeSchool = school.trim().ifEmpty { "Nairobi Primary School" }
+        val safeGrade = grade.coerceIn(1, 12)
+        val safeStream = classStream.trim().ifEmpty { "Grade $safeGrade East - $safeSchool" }
+        val validPin = pin.filter(Char::isDigit).take(4).let { if (it.length == 4) it else "1234" }
+        val chosenSubjects = subjects.ifEmpty { listOf(LearningArea.MATHEMATICS) }.take(8)
+
+        val draft = TeacherAccount(
+            teacherCode = code,
+            fullName = fullName.trim().ifEmpty { "Teacher" },
+            school = safeSchool,
+            tscNumber = tscNumber.trim(),
+            pin = validPin,
+            subjects = chosenSubjects,
+            grade = safeGrade,
+            classStream = safeStream
+        )
+
+        val cloudRes = FirestoreSyncClient.registerTeacher(draft)
+        val saved = if (cloudRes.ok && cloudRes.data != null) cloudRes.data else draft
+
+        _state.update { s ->
+            val nextList = listOf(saved) + s.registeredTeachers.filterNot { it.teacherCode == saved.teacherCode }
+            s.copy(
+                roleView = RoleView.TEACHER,
+                teacherAccount = saved,
+                registeredTeachers = nextList
+            ).also(::persistState)
+        }
+        return saved
+    }
+
+    suspend fun loginTeacherAsync(rawCode: String, rawPin: String): TeacherLoginResult {
+        val code = FirestoreSyncClient.normalizeTeacherCode(rawCode)
+        val pin = rawPin.filter(Char::isDigit).take(4)
+        if (code.isEmpty() || pin.length != 4) {
+            return TeacherLoginResult(false, message = "Enter both your Teacher Code (TCH-XXXX) and 4-digit PIN.")
+        }
+
+        val cloudRes = FirestoreSyncClient.loginTeacher(code, pin)
+        if (cloudRes.ok && cloudRes.data != null) {
+            val logged = cloudRes.data
+            _state.update { s ->
+                val nextList = listOf(logged) + s.registeredTeachers.filterNot { it.teacherCode == logged.teacherCode }
+                s.copy(
+                    roleView = RoleView.TEACHER,
+                    teacherAccount = logged,
+                    registeredTeachers = nextList,
+                    showSetupWizard = false
+                ).also(::persistState)
+            }
+            return TeacherLoginResult(true, logged, "Signed in as ${logged.fullName}")
+        }
+
+        val localMatch = _state.value.registeredTeachers.firstOrNull {
+            FirestoreSyncClient.normalizeTeacherCode(it.teacherCode) == code
+        }
+        if (localMatch != null) {
+            return if (localMatch.pin == pin) {
+                _state.update { s ->
+                    s.copy(
+                        roleView = RoleView.TEACHER,
+                        teacherAccount = localMatch,
+                        showSetupWizard = false
+                    ).also(::persistState)
+                }
+                TeacherLoginResult(true, localMatch, "Signed in as ${localMatch.fullName}")
+            } else {
+                TeacherLoginResult(false, message = "Incorrect 4-digit Teacher PIN for $code.")
+            }
+        }
+
+        return TeacherLoginResult(
+            success = false,
+            message = cloudRes.errorMessage.ifEmpty { "No teacher account found for \"$code\"." }
+        )
+    }
+
+    fun logoutTeacher() {
+        _state.update { it.copy(teacherAccount = null).also(::persistState) }
+    }
+
     fun pushAssignment(
         classStream: String,
+        school: String,
         grade: Int,
         learningArea: LearningArea,
         strand: String,
         subStrand: String
     ) {
+        val activeTeacher = _state.value.teacherAccount
+        val targetSchool = school.trim().ifEmpty { activeTeacher?.school ?: "Nairobi Primary School" }
         val matchingLesson = CbcCurriculumRepository.lessons.firstOrNull {
+            it.learningArea == learningArea && it.grade == grade
+        } ?: CbcCurriculumRepository.lessons.firstOrNull {
             it.learningArea == learningArea
         } ?: CbcCurriculumRepository.lessons.first()
+
         val nowTime = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
         val created = TeacherAssignment(
             id = "assign-${System.currentTimeMillis()}",
-            classStream = classStream,
+            classStream = classStream.trim().ifEmpty { "Grade $grade East - $targetSchool" },
+            school = targetSchool,
             grade = grade,
             learningArea = learningArea,
             strand = strand,
             subStrand = subStrand,
             lessonId = matchingLesson.id,
             title = "$subStrand (${matchingLesson.title})",
+            teacherName = activeTeacher?.fullName ?: "Class Teacher",
+            teacherCode = activeTeacher?.teacherCode ?: "",
             dueLabel = "Priority · Complete First",
             pushedAt = nowTime,
             completedByChildIds = emptyList()
         )
         _state.update {
             it.copy(assignments = listOf(created) + it.assignments).also(::persistState)
+        }
+        scope.launch {
+            FirestoreSyncClient.publishSchoolGradeAssignment(created, targetSchool)
         }
     }
 

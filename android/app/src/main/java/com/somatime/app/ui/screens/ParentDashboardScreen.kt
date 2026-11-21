@@ -411,7 +411,8 @@ fun ParentDashboardScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        LearningArea.entries.forEach { area ->
+                        val gradeSubjects = (CbcCurriculumRepository.subjectsForGrade(child.grade) + child.mandatorySubjects).distinct()
+                        gradeSubjects.forEach { area ->
                             FilterChip(
                                 selected = area in child.mandatorySubjects,
                                 onClick = { onToggleMandatory(child.id, area) },

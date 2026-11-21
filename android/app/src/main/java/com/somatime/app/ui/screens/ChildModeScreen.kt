@@ -69,15 +69,30 @@ fun ChildModeScreen(
     onCompleteLesson: (String, CBCLesson, Int) -> LessonCompletionResult
 ) {
     val child = uiState.selectedChild
+    val learnerGrade = child.grade
     val isLocked = child.isLocked || child.availableScreenSeconds <= 0
-    val pendingAssignments = uiState.assignments.filter { child.id !in it.completedByChildIds }
-    val mandatoryDone = child.mandatorySubjects.isEmpty() ||
+    val pendingAssignments = uiState.assignments.filter {
+        it.grade == learnerGrade && child.id !in it.completedByChildIds
+    }
+    val gradeLessons = CbcCurriculumRepository.lessons.filter { it.grade == learnerGrade }
+    val hasMandatoryLessonForGrade = child.mandatorySubjects.isNotEmpty() &&
+        gradeLessons.any { it.learningArea in child.mandatorySubjects }
+    val mandatoryDone = !hasMandatoryLessonForGrade ||
         child.activityLogs.any { it.learningArea in child.mandatorySubjects }
 
     var activeLesson by remember { mutableStateOf<CBCLesson?>(null) }
     var ruleNotice by remember { mutableStateOf("") }
-    var selectedGrade by remember { mutableIntStateOf(child.grade) }
     var selectedArea by remember { mutableStateOf<LearningArea?>(null) }
+    var curriculumSearch by remember { mutableStateOf("") }
+
+    val gradeSubjects = remember(learnerGrade) {
+        CbcCurriculumRepository.subjectsForGrade(learnerGrade)
+    }
+    val effectiveSelectedArea = if (selectedArea == null || selectedArea in gradeSubjects) {
+        selectedArea
+    } else {
+        null
+    }
 
     fun launchLesson(lesson: CBCLesson, isPriority: Boolean) {
         if (pendingAssignments.isNotEmpty() && !isPriority && pendingAssignments.first().lessonId != lesson.id) {
@@ -219,11 +234,9 @@ fun ChildModeScreen(
                                     val target = if (pendingAssignments.isNotEmpty()) {
                                         CbcCurriculumRepository.lessons.firstOrNull {
                                             it.id == pendingAssignments.first().lessonId
-                                        } ?: CbcCurriculumRepository.lessons.first()
+                                        } ?: gradeLessons.firstOrNull() ?: CbcCurriculumRepository.lessons.first()
                                     } else {
-                                        CbcCurriculumRepository.lessons.firstOrNull {
-                                            it.grade == child.grade
-                                        } ?: CbcCurriculumRepository.lessons.first()
+                                        gradeLessons.firstOrNull() ?: CbcCurriculumRepository.lessons.first()
                                     }
                                     launchLesson(target, pendingAssignments.isNotEmpty())
                                 },
@@ -326,16 +339,24 @@ fun ChildModeScreen(
             }
         }
 
-        // Playable 5-Minute Micro-Lessons
+        // Playable 5-Minute Micro-Lessons for Learner's Grade Only
         item {
             Text(
-                "Interactive 5-Minute CBC Activities",
+                "Grade $learnerGrade Interactive 5-Minute Activities",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
+            Text(
+                "Showing only Grade $learnerGrade (${CbcCurriculumRepository.levelGroupForGrade(learnerGrade)}) content",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF64748B)
+            )
         }
 
-        items(CbcCurriculumRepository.lessons) { lesson ->
+        val filteredGradeLessons = gradeLessons.filter {
+            effectiveSelectedArea == null || it.learningArea == effectiveSelectedArea
+        }
+        items(filteredGradeLessons) { lesson ->
             val done = lesson.id in child.completedLessonIds
             Card(
                 shape = RoundedCornerShape(18.dp),
@@ -389,39 +410,50 @@ fun ChildModeScreen(
             }
         }
 
-        // Grade 1-12 CBC Curriculum Browser
+        // Grade-Locked CBC Curriculum Browser
+        val gradeCatalogTotal = CbcCurriculumRepository.catalog.filter { it.grade == learnerGrade }
+        val q = curriculumSearch.trim().lowercase()
+        val filteredCatalog = gradeCatalogTotal.filter { entry ->
+            val areaOk = effectiveSelectedArea == null || entry.learningArea == effectiveSelectedArea
+            val queryOk = q.isEmpty() ||
+                entry.learningArea.displayName.lowercase().contains(q) ||
+                entry.strand.lowercase().contains(q) ||
+                entry.subStrand.lowercase().contains(q)
+            areaOk && queryOk
+        }
+
         item {
             Text(
-                "Kenyan CBC Curriculum Browser (Grades 1–12)",
+                "Grade $learnerGrade CBC Subjects, Strands & Sub-strands",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
+            )
+            Text(
+                "${CbcCurriculumRepository.levelGroupForGrade(learnerGrade)} · ${gradeSubjects.size} subjects · ${gradeCatalogTotal.size} sub-strands",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF64748B)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            OutlinedTextField(
+                value = curriculumSearch,
+                onValueChange = { curriculumSearch = it },
+                label = { Text("Search strand or topic...") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
             )
             Spacer(modifier = Modifier.height(6.dp))
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                (1..12).forEach { g ->
-                    FilterChip(
-                        selected = selectedGrade == g,
-                        onClick = { selectedGrade = g },
-                        label = { Text("G$g") }
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
                 FilterChip(
-                    selected = selectedArea == null,
+                    selected = effectiveSelectedArea == null,
                     onClick = { selectedArea = null },
-                    label = { Text("All Areas") }
+                    label = { Text("All Subjects (${gradeSubjects.size})") }
                 )
-                LearningArea.entries.forEach { area ->
+                gradeSubjects.forEach { area ->
                     FilterChip(
-                        selected = selectedArea == area,
+                        selected = effectiveSelectedArea == area,
                         onClick = { selectedArea = area },
                         label = { Text(area.displayName) }
                     )
@@ -429,9 +461,6 @@ fun ChildModeScreen(
             }
         }
 
-        val filteredCatalog = CbcCurriculumRepository.catalog.filter {
-            it.grade == selectedGrade && (selectedArea == null || it.learningArea == selectedArea)
-        }
         items(filteredCatalog) { entry ->
             Card(
                 shape = RoundedCornerShape(16.dp),
@@ -447,7 +476,8 @@ fun ChildModeScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "${entry.learningArea.displayName} · ${entry.levelGroup}",
+                            "${entry.learningArea.displayName} · ${entry.levelGroup}" +
+                                (entry.pathway?.let { " · $it" } ?: ""),
                             style = MaterialTheme.typography.labelMedium,
                             color = SomaEmerald,
                             fontWeight = FontWeight.Bold
@@ -460,10 +490,31 @@ fun ChildModeScreen(
                         )
                     }
                     OutlinedButton(onClick = {
-                        val linked = CbcCurriculumRepository.lessons.firstOrNull {
+                        val base = CbcCurriculumRepository.lessons.firstOrNull {
                             it.id == entry.linkedLessonId
-                        } ?: CbcCurriculumRepository.lessons.first()
-                        launchLesson(linked, false)
+                        } ?: gradeLessons.firstOrNull {
+                            it.learningArea == entry.learningArea
+                        } ?: CbcCurriculumRepository.lessons.firstOrNull {
+                            it.learningArea == entry.learningArea
+                        } ?: gradeLessons.firstOrNull() ?: CbcCurriculumRepository.lessons.first()
+
+                        val contextual = if (
+                            base.learningArea == entry.learningArea &&
+                            base.strand == entry.strand &&
+                            base.subStrand == entry.subStrand
+                        ) {
+                            base
+                        } else {
+                            base.copy(
+                                title = "${entry.subStrand} Practice",
+                                grade = learnerGrade,
+                                levelGroup = entry.levelGroup,
+                                learningArea = entry.learningArea,
+                                strand = entry.strand,
+                                subStrand = entry.subStrand
+                            )
+                        }
+                        launchLesson(contextual, false)
                     }) {
                         Text("Practice")
                     }

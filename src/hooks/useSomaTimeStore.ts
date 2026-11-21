@@ -7,12 +7,18 @@ import {
   INITIAL_CLASS_ROSTER,
   PARENT_PIN,
   generatePairingCode,
+  generateTeacherCode,
 } from '../data/cbcCurriculum';
 import {
   fetchAndPairFromCloud,
+  loginTeacherFromCloud,
   normalizePairingCode,
+  normalizeTeacherCode,
   publishPairingToCloud,
+  publishSchoolGradeAssignmentToCloud,
+  registerTeacherInCloud,
   subscribePairingSession,
+  subscribeSchoolGradeAssignments,
   syncLearnerStateToCloud,
   type CloudPairingDoc,
 } from '../lib/firebase';
@@ -24,6 +30,7 @@ import type {
   LearningArea,
   ParentAccount,
   RoleView,
+  TeacherAccount,
   TeacherAssignment,
 } from '../types/somatime';
 
@@ -34,6 +41,8 @@ interface PersistedState {
   selectedChildId: string;
   handOffActive: boolean;
   parentAccount: ParentAccount;
+  teacherAccount: TeacherAccount | null;
+  registeredTeachers: TeacherAccount[];
   children: ChildProfile[];
   assignments: TeacherAssignment[];
   classRoster: ClassStudentRecord[];
@@ -50,6 +59,8 @@ function getDefaultState(): PersistedState {
       pin: PARENT_PIN,
       registered: true,
     },
+    teacherAccount: null,
+    registeredTeachers: [],
     children: INITIAL_CHILDREN,
     assignments: INITIAL_ASSIGNMENTS,
     classRoster: INITIAL_CLASS_ROSTER,
@@ -69,6 +80,8 @@ function loadState(): PersistedState {
       selectedChildId: parsed.selectedChildId ?? parsed.children[0].id,
       handOffActive: Boolean(parsed.handOffActive),
       parentAccount: parsed.parentAccount ?? getDefaultState().parentAccount,
+      teacherAccount: parsed.teacherAccount ?? null,
+      registeredTeachers: Array.isArray(parsed.registeredTeachers) ? parsed.registeredTeachers : [],
       children: parsed.children,
       assignments: parsed.assignments ?? INITIAL_ASSIGNMENTS,
       classRoster: parsed.classRoster ?? INITIAL_CLASS_ROSTER,
@@ -232,6 +245,41 @@ export function useSomaTimeStore() {
 
     return () => unsubscribe();
   }, [selectedChild?.pairingCode]);
+
+  // Live Firestore real-time subscription for assignments matching the learner's school and grade
+  useEffect(() => {
+    const school = selectedChild?.school;
+    const grade = selectedChild?.grade;
+    if (!school || !grade) return;
+
+    const unsubscribe = subscribeSchoolGradeAssignments(
+      school,
+      grade,
+      (cloudAssignments) => {
+        if (cloudAssignments.length === 0) return;
+        setState((prev) => {
+          const existingById = new Map(prev.assignments.map((a) => [a.id, a]));
+          const mergedCloud = cloudAssignments.map((ca) => {
+            const prevItem = existingById.get(ca.id);
+            return prevItem
+              ? { ...ca, completedByChildIds: prevItem.completedByChildIds }
+              : ca;
+          });
+          const cloudIds = new Set(mergedCloud.map((a) => a.id));
+          const remainingLocal = prev.assignments.filter((a) => !cloudIds.has(a.id));
+          return {
+            ...prev,
+            assignments: [...mergedCloud, ...remainingLocal],
+          };
+        });
+      },
+      () => {
+        // Silently tolerate transient offline listener errors
+      }
+    );
+
+    return () => unsubscribe();
+  }, [selectedChild?.school, selectedChild?.grade]);
 
   // Live 1-second background monitor ticker checking available watch minutes
   useEffect(() => {
@@ -804,15 +852,145 @@ export function useSomaTimeStore() {
     []
   );
 
+  const registerTeacher = useCallback(
+    async (input: {
+      fullName: string;
+      school: string;
+      tscNumber: string;
+      pin: string;
+      subjects: LearningArea[];
+      grade: number;
+      classStream: string;
+    }): Promise<TeacherAccount> => {
+      const code = generateTeacherCode();
+      const cleanSchool = input.school.trim() || 'Nairobi Primary School';
+      const safeGrade = Math.max(1, Math.min(12, Math.round(input.grade || 6)));
+      const cleanStream =
+        input.classStream.trim() || `Grade ${safeGrade} East - ${cleanSchool}`;
+      const cleanPin = input.pin.replace(/\D/g, '').slice(0, 4);
+      const validPin = cleanPin.length === 4 ? cleanPin : '1234';
+      const chosenSubjects: LearningArea[] =
+        input.subjects.length > 0 ? input.subjects.slice(0, 8) : ['Mathematics'];
+
+      const draft: TeacherAccount = {
+        teacherCode: code,
+        fullName: input.fullName.trim() || 'Teacher',
+        school: cleanSchool,
+        tscNumber: input.tscNumber.trim(),
+        pin: validPin,
+        subjects: chosenSubjects,
+        grade: safeGrade,
+        classStream: cleanStream,
+        registered: true,
+      };
+
+      let saved = draft;
+      try {
+        saved = await registerTeacherInCloud(draft);
+      } catch {
+        // Retain local profile if offline; user can still use teacher portal immediately
+      }
+
+      setState((prev) => ({
+        ...prev,
+        roleView: 'teacher',
+        teacherAccount: saved,
+        registeredTeachers: [
+          saved,
+          ...prev.registeredTeachers.filter((t) => t.teacherCode !== saved.teacherCode),
+        ],
+      }));
+
+      return saved;
+    },
+    []
+  );
+
+  const loginTeacher = useCallback(
+    async (
+      rawCode: string,
+      rawPin: string
+    ): Promise<{ ok: boolean; teacher?: TeacherAccount; message: string }> => {
+      const code = normalizeTeacherCode(rawCode);
+      const pin = rawPin.replace(/\D/g, '').slice(0, 4);
+      if (!code || pin.length !== 4) {
+        return {
+          ok: false,
+          message: 'Enter both your Teacher Code (e.g. TCH-4821) and 4-digit PIN.',
+        };
+      }
+
+      try {
+        const cloudRes = await loginTeacherFromCloud(code, pin);
+        if (cloudRes.ok && cloudRes.teacher) {
+          const logged = cloudRes.teacher;
+          setState((prev) => ({
+            ...prev,
+            roleView: 'teacher',
+            teacherAccount: logged,
+            registeredTeachers: [
+              logged,
+              ...prev.registeredTeachers.filter((t) => t.teacherCode !== logged.teacherCode),
+            ],
+          }));
+          return cloudRes;
+        }
+        if (cloudRes.message.includes('Incorrect')) {
+          return cloudRes;
+        }
+      } catch {
+        // Fallback to local registered teachers below
+      }
+
+      const localMatch = stateRef.current.registeredTeachers.find(
+        (t) => normalizeTeacherCode(t.teacherCode) === code
+      );
+      if (!localMatch) {
+        return {
+          ok: false,
+          message: `No teacher account found for "${code}". Register first to generate a Teacher Code.`,
+        };
+      }
+      if (localMatch.pin !== pin) {
+        return {
+          ok: false,
+          message: 'Incorrect 4-digit Teacher PIN for this Teacher Code.',
+        };
+      }
+
+      setState((prev) => ({
+        ...prev,
+        roleView: 'teacher',
+        teacherAccount: localMatch,
+      }));
+      return { ok: true, teacher: localMatch, message: `Signed in as ${localMatch.fullName}` };
+    },
+    []
+  );
+
+  const logoutTeacher = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      teacherAccount: null,
+    }));
+  }, []);
+
   const pushTeacherAssignment = useCallback(
     (input: {
       classStream: string;
+      school?: string;
       grade: number;
       learningArea: LearningArea;
       strand: string;
       subStrand: string;
     }) => {
+      const activeTeacher = stateRef.current.teacherAccount;
+      const targetSchool =
+        input.school?.trim() || activeTeacher?.school || 'Nairobi Primary School';
       const matchingLesson =
+        CBC_LESSONS.find(
+          (l) => l.learningArea === input.learningArea && l.grade === input.grade
+        ) ??
         CBC_LESSONS.find(
           (l) =>
             l.learningArea === input.learningArea &&
@@ -824,12 +1002,15 @@ export function useSomaTimeStore() {
       const newAssignment: TeacherAssignment = {
         id: `assign-${Date.now()}`,
         classStream: input.classStream,
+        school: targetSchool,
         grade: input.grade,
         learningArea: input.learningArea,
         strand: input.strand,
         subStrand: input.subStrand,
         lessonId: matchingLesson.id,
         title: `${input.subStrand} (${matchingLesson.title})`,
+        teacherName: activeTeacher?.fullName || 'Class Teacher',
+        teacherCode: activeTeacher?.teacherCode,
         dueLabel: 'Priority · Before Screen Time',
         pushedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         completedByChildIds: [],
@@ -839,6 +1020,8 @@ export function useSomaTimeStore() {
         ...prev,
         assignments: [newAssignment, ...prev.assignments],
       }));
+
+      void publishSchoolGradeAssignmentToCloud(newAssignment, targetSchool).catch(() => {});
     },
     []
   );
@@ -862,6 +1045,8 @@ export function useSomaTimeStore() {
     selectedChild,
     handOffActive: state.handOffActive,
     parentAccount: state.parentAccount,
+    teacherAccount: state.teacherAccount,
+    registeredTeachers: state.registeredTeachers,
     children: state.children,
     assignments: state.assignments,
     classRoster: state.classRoster,
@@ -882,6 +1067,9 @@ export function useSomaTimeStore() {
     selectActiveApp,
     completeLesson,
     resolveApproval,
+    registerTeacher,
+    loginTeacher,
+    logoutTeacher,
     pushTeacherAssignment,
     resetDemoData,
   };

@@ -2,11 +2,30 @@ import type {
   CBCLevelGroup,
   CBCLesson,
   CBCRubric,
+  CbcCatalogEntry,
   ChildProfile,
   ClassStudentRecord,
   LearningArea,
   TeacherAssignment,
 } from '../types/somatime';
+import { CBC_EXTRA_LESSONS } from './cbcExtraLessons';
+import {
+  ALL_CBC_LEARNING_AREAS,
+  CBC_CURRICULUM_TREE,
+  buildCatalogForGrade,
+  buildFullDirectoryCatalog,
+  getCurriculumStats,
+  getStrandsForSubject,
+  getSubjectsForGrade,
+} from './cbcFullCatalog';
+
+export {
+  CBC_CURRICULUM_TREE,
+  buildCatalogForGrade,
+  getCurriculumStats,
+  getStrandsForSubject,
+  getSubjectsForGrade,
+};
 
 export const PARENT_PIN = '1234';
 
@@ -17,16 +36,8 @@ export const ASSETS = {
   learningBanner: '/src/assets/images/cbc_learning_banner_1794996019764.jpg',
 };
 
-export const ALL_LEARNING_AREAS: LearningArea[] = [
-  'Mathematics',
-  'English',
-  'Kiswahili',
-  'Science & Technology',
-  'Integrated Science',
-  'Social Studies',
-  'Agriculture & Nutrition',
-  'Creative Arts',
-];
+export const ALL_LEARNING_AREAS: LearningArea[] = ALL_CBC_LEARNING_AREAS;
+
 
 export const CBC_RUBRIC_META: Record<
   CBCRubric,
@@ -509,35 +520,378 @@ export const CBC_LESSONS: CBCLesson[] = [
       },
     ],
   },
+  {
+    id: 'g1-math-coins',
+    title: 'Counting & Kenyan Shilling Coins',
+    swahiliTitle: 'Counting & Kenyan Shilling Coins',
+    grade: 1,
+    levelGroup: 'Lower Primary',
+    learningArea: 'Mathematics',
+    strand: 'Numbers',
+    subStrand: 'Whole Numbers & KES Coins',
+    durationMins: 5,
+    summary: 'Count objects up to 20 and recognize KES 1, KES 5, KES 10, and KES 20 coins.',
+    questions: [
+      {
+        id: 'g1-m-1',
+        type: 'multiple_choice',
+        prompt: 'Amina has two KES 5 coins in her pocket. How much money does she have altogether?',
+        bilingualHint: 'Hint: Add 5 + 5 together.',
+        options: ['KES 10', 'KES 5', 'KES 15', 'KES 20'],
+        correctAnswer: 'KES 10',
+        explanation: 'Well done! KES 5 + KES 5 = KES 10.',
+      },
+      {
+        id: 'g1-m-2',
+        type: 'matching',
+        prompt: 'Match each counting group to the right total.',
+        bilingualHint: 'Hint: Count carefully in ones and tens.',
+        pairs: [
+          { id: 'g1m1', left: '4 mangoes + 3 mangoes', right: '7 mangoes' },
+          { id: 'g1m2', left: '10 pencils + 2 pencils', right: '12 pencils' },
+          { id: 'g1m3', left: '9 books - 4 books', right: '5 books' },
+        ],
+        explanation: 'Awesome counting! You solved all three sums accurately.',
+      },
+      {
+        id: 'g1-m-3',
+        type: 'fill_blank',
+        prompt: 'Count forward by 1: 14, 15, 16, ________.',
+        bilingualHint: 'Hint: The number right after 16.',
+        blankPrefix: 'Next number:',
+        blankSuffix: '',
+        correctAnswer: '17',
+        acceptableAnswers: ['17', 'seventeen'],
+        explanation: 'Correct! 17 comes right after 16.',
+      },
+    ],
+  },
+  {
+    id: 'g3-math-measurement',
+    title: 'Kenyan Time, Mass & Metres',
+    swahiliTitle: 'Kenyan Time, Mass & Metres',
+    grade: 3,
+    levelGroup: 'Lower Primary',
+    learningArea: 'Mathematics',
+    strand: 'Measurement',
+    subStrand: 'Length, Mass & Clock Time',
+    durationMins: 5,
+    summary: 'Measure classroom lengths in metres, market produce in kilograms, and read half-past times.',
+    questions: [
+      {
+        id: 'g3-m-1',
+        type: 'multiple_choice',
+        prompt: 'A shopkeeper weighs 2 kg of maize flour and 3 kg of beans in Nakuru. What is the total mass?',
+        bilingualHint: 'Hint: Add 2 kg and 3 kg.',
+        options: ['5 kg', '6 kg', '1 kg', '4 kg'],
+        correctAnswer: '5 kg',
+        explanation: 'Great! 2 kg + 3 kg = 5 kg.',
+      },
+      {
+        id: 'g3-m-2',
+        type: 'matching',
+        prompt: 'Match each item to its best Kenyan CBC measurement unit.',
+        bilingualHint: 'Hint: Sugar is weighed in kg; milk is measured in litres; cloth in metres.',
+        pairs: [
+          { id: 'g3m1', left: 'Packet of sugar', right: 'Kilograms (kg)' },
+          { id: 'g3m2', left: 'Bottle of milk', right: 'Litres (L)' },
+          { id: 'g3m3', left: 'Classroom wall', right: 'Metres (m)' },
+        ],
+        explanation: 'Spot on! You picked the right metric unit for mass, capacity, and length.',
+      },
+      {
+        id: 'g3-m-3',
+        type: 'fill_blank',
+        prompt: 'How many minutes are in 1 full hour?',
+        bilingualHint: 'Hint: A clock face has 60 small minute steps.',
+        blankPrefix: '1 hour =',
+        blankSuffix: 'minutes',
+        correctAnswer: '60',
+        acceptableAnswers: ['60', 'sixty'],
+        explanation: 'Correct! There are 60 minutes in 1 hour.',
+      },
+    ],
+  },
+  {
+    id: 'g5-math-decimals',
+    title: 'Decimals & Market Change (KES)',
+    swahiliTitle: 'Decimals & Market Change (KES)',
+    grade: 5,
+    levelGroup: 'Upper Primary',
+    learningArea: 'Mathematics',
+    strand: 'Numbers',
+    subStrand: 'Decimals in Shopping',
+    durationMins: 5,
+    summary: 'Add and subtract decimals up to 2 decimal places using Kenyan retail prices.',
+    questions: [
+      {
+        id: 'g5-m-1',
+        type: 'multiple_choice',
+        prompt: 'A loaf of bread costs KES 65.50 and milk costs KES 60.00. What is the total bill?',
+        bilingualHint: 'Hint: Add 65 + 60, then keep .50.',
+        options: ['KES 125.50', 'KES 120.50', 'KES 135.50', 'KES 115.50'],
+        correctAnswer: 'KES 125.50',
+        explanation: 'Correct! 65.50 + 60.00 = KES 125.50.',
+      },
+      {
+        id: 'g5-m-2',
+        type: 'matching',
+        prompt: 'Match each fraction to its decimal equivalent.',
+        bilingualHint: 'Hint: Divide the top number by 10 or 100.',
+        pairs: [
+          { id: 'g5m1', left: '1/2', right: '0.5' },
+          { id: 'g5m2', left: '1/4', right: '0.25' },
+          { id: 'g5m3', left: '3/10', right: '0.3' },
+        ],
+        explanation: 'Great work converting fractions to decimals!',
+      },
+      {
+        id: 'g5-m-3',
+        type: 'fill_blank',
+        prompt: 'Evaluate: 4.75 + 1.25 = ________.',
+        bilingualHint: 'Hint: 0.75 + 0.25 makes 1 whole.',
+        blankPrefix: 'Answer:',
+        blankSuffix: '',
+        correctAnswer: '6',
+        acceptableAnswers: ['6', '6.0', '6.00'],
+        explanation: 'Well done! 4.75 + 1.25 = 6.00.',
+      },
+    ],
+  },
+  {
+    id: 'g6-math-percentages',
+    title: 'Percentages & Farm Harvests',
+    swahiliTitle: 'Percentages & Farm Harvests',
+    grade: 6,
+    levelGroup: 'Upper Primary',
+    learningArea: 'Mathematics',
+    strand: 'Numbers',
+    subStrand: 'Percentages & Ratios',
+    durationMins: 5,
+    summary: 'Convert fractions to percentages and calculate discounts at Kenyan shops.',
+    questions: [
+      {
+        id: 'g6-m-1',
+        type: 'multiple_choice',
+        prompt: 'A Grade 6 learner scores 18 out of 20 in a Mathematics quiz. What percentage is that?',
+        bilingualHint: 'Hint: Multiply 18/20 by 100.',
+        options: ['90%', '80%', '85%', '95%'],
+        correctAnswer: '90%',
+        explanation: 'Excellent! (18 ÷ 20) × 100 = 90%.',
+      },
+      {
+        id: 'g6-m-2',
+        type: 'matching',
+        prompt: 'Match each percentage to its fraction.',
+        bilingualHint: 'Hint: Percent means out of 100.',
+        pairs: [
+          { id: 'g6m1', left: '50%', right: '1/2' },
+          { id: 'g6m2', left: '25%', right: '1/4' },
+          { id: 'g6m3', left: '75%', right: '3/4' },
+        ],
+        explanation: 'Well done! Understanding percent-fraction links makes shopping math fast.',
+      },
+      {
+        id: 'g6-m-3',
+        type: 'fill_blank',
+        prompt: 'A school bag priced at KES 1,000 has a 10% discount. How many shillings do you save?',
+        bilingualHint: 'Hint: 10% is 1/10 of 1,000.',
+        blankPrefix: 'Savings: KES',
+        blankSuffix: '',
+        correctAnswer: '100',
+        acceptableAnswers: ['100', 'kes 100'],
+        explanation: 'Spot on! 10% of KES 1,000 = KES 100 saved.',
+      },
+    ],
+  },
+  {
+    id: 'g9-sci-ecosystems',
+    title: 'Kenyan Ecosystems & Conservation',
+    swahiliTitle: 'Kenyan Ecosystems & Conservation',
+    grade: 9,
+    levelGroup: 'Junior School',
+    learningArea: 'Integrated Science',
+    strand: 'Living Things & Environment',
+    subStrand: 'Food Webs & Biodiversity',
+    durationMins: 5,
+    summary: 'Analyze savanna food chains, trophic levels, and wetland conservation in Kenya.',
+    questions: [
+      {
+        id: 'g9-s-1',
+        type: 'multiple_choice',
+        prompt: 'In a Maasai Mara savanna food chain (Acacia → Giraffe → Lion), what ecological role does the Acacia tree play?',
+        bilingualHint: 'Hint: Plants make food from sunlight using photosynthesis.',
+        options: ['Producer', 'Primary consumer', 'Secondary consumer', 'Decomposer'],
+        correctAnswer: 'Producer',
+        explanation: 'Correct! Green plants are producers because they convert sunlight into chemical energy.',
+      },
+      {
+        id: 'g9-s-2',
+        type: 'matching',
+        prompt: 'Match each Kenyan ecosystem organism to its trophic role.',
+        bilingualHint: 'Hint: Herbivores eat plants; fungi recycle dead matter.',
+        pairs: [
+          { id: 'g9s1', left: 'Savanna Grass', right: 'Producer' },
+          { id: 'g9s2', left: 'Zebra', right: 'Primary Consumer' },
+          { id: 'g9s3', left: 'Soil Bacteria & Fungi', right: 'Decomposer' },
+        ],
+        explanation: 'Great job! Every trophic level keeps the Kenyan savanna ecosystem balanced.',
+      },
+      {
+        id: 'g9-s-3',
+        type: 'fill_blank',
+        prompt: 'The process by which green leaves use sunlight, water, and carbon dioxide to make glucose is called ________.',
+        bilingualHint: 'Hint: Starts with photo-.',
+        blankPrefix: 'Process:',
+        blankSuffix: '',
+        correctAnswer: 'Photosynthesis',
+        acceptableAnswers: ['photosynthesis'],
+        explanation: 'Accurate! Photosynthesis produces glucose and oxygen.',
+      },
+    ],
+  },
+  {
+    id: 'g11-math-finance',
+    title: 'SACCO Savings & Compound Interest',
+    swahiliTitle: 'SACCO Savings & Compound Interest',
+    grade: 11,
+    levelGroup: 'Senior School',
+    pathway: 'STEM & Social Sciences',
+    learningArea: 'Mathematics',
+    strand: 'Commercial Arithmetic',
+    subStrand: 'Compound Interest & Appreciation',
+    durationMins: 5,
+    summary: 'Model Kenyan SACCO savings growth using compound interest formulas.',
+    questions: [
+      {
+        id: 'g11-m-1',
+        type: 'multiple_choice',
+        prompt: 'KES 10,000 is saved at 10% p.a. compound interest for 2 years. What is the amount after 2 years?',
+        bilingualHint: 'Hint: Year 1 = 11,000; Year 2 adds 10% of 11,000.',
+        options: ['KES 12,100', 'KES 12,000', 'KES 11,100', 'KES 12,500'],
+        correctAnswer: 'KES 12,100',
+        explanation: 'Correct! 10,000 × (1.1)² = KES 12,100.',
+      },
+      {
+        id: 'g11-m-2',
+        type: 'matching',
+        prompt: 'Match each financial term to its Kenyan CBC meaning.',
+        bilingualHint: 'Hint: Principal is starting cash; Appreciation means rising value.',
+        pairs: [
+          { id: 'g11m1', left: 'Principal (P)', right: 'Initial amount invested or borrowed' },
+          { id: 'g11m2', left: 'Appreciation', right: 'Increase in asset value over time' },
+          { id: 'g11m3', left: 'Depreciation', right: 'Decrease in asset value over time' },
+        ],
+        explanation: 'Excellent mastery of Senior School commercial arithmetic!',
+      },
+      {
+        id: 'g11-m-3',
+        type: 'fill_blank',
+        prompt: 'How much compound interest alone was earned on KES 10,000 if the final amount is KES 12,100?',
+        bilingualHint: 'Hint: Interest = Amount - Principal.',
+        blankPrefix: 'Interest: KES',
+        blankSuffix: '',
+        correctAnswer: '2100',
+        acceptableAnswers: ['2100', '2,100', 'kes 2100'],
+        explanation: 'Spot on! 12,100 - 10,000 = KES 2,100.',
+      },
+    ],
+  },
+  {
+    id: 'g12-sci-genetics',
+    title: 'Biotechnology & Drought-Tolerant Crops',
+    swahiliTitle: 'Biotechnology & Drought-Tolerant Crops',
+    grade: 12,
+    levelGroup: 'Senior School',
+    pathway: 'STEM Pathway',
+    learningArea: 'Integrated Science',
+    strand: 'Genetics & Biotechnology',
+    subStrand: 'Selective Breeding & Food Security',
+    durationMins: 5,
+    summary: 'Examine how KALRO research improves maize and sorghum resilience across Kenyan climates.',
+    questions: [
+      {
+        id: 'g12-s-1',
+        type: 'multiple_choice',
+        prompt: 'Why do Kenyan agricultural researchers breed drought-tolerant maize varieties for semi-arid counties?',
+        bilingualHint: 'Hint: Think about reliable harvests when rainfall is low.',
+        options: [
+          'To improve food security during erratic rainfall',
+          'To increase soil erosion',
+          'To eliminate pollination',
+          'To stop photosynthesis',
+        ],
+        correctAnswer: 'To improve food security during erratic rainfall',
+        explanation: 'Accurate! Drought-tolerant traits protect harvests in ASAL regions.',
+      },
+      {
+        id: 'g12-s-2',
+        type: 'matching',
+        prompt: 'Match each genetics concept to its definition.',
+        bilingualHint: 'Hint: DNA carries genetic code; phenotype is the observable trait.',
+        pairs: [
+          { id: 'g12s1', left: 'Genotype', right: 'Genetic makeup of an organism' },
+          { id: 'g12s2', left: 'Phenotype', right: 'Observable physical characteristics' },
+          { id: 'g12s3', left: 'DNA', right: 'Molecule carrying hereditary instructions' },
+        ],
+        explanation: 'Well done! Clear understanding of genetics and biotechnology.',
+      },
+      {
+        id: 'g12-s-3',
+        type: 'fill_blank',
+        prompt: 'In Kenya, the national agricultural research body developing resilient seeds is abbreviated ________.',
+        bilingualHint: 'Hint: Kenya Agricultural and Livestock Research Organization (5 letters).',
+        blankPrefix: 'Organization:',
+        blankSuffix: '',
+        correctAnswer: 'KALRO',
+        acceptableAnswers: ['kalro'],
+        explanation: 'Correct! KALRO leads agricultural research and resilient seed development in Kenya.',
+      },
+    ],
+  },
+  ...CBC_EXTRA_LESSONS,
 ];
 
-export const CBC_DIRECTORY_CATALOG: Array<{
-  grade: number;
-  levelGroup: CBCLevelGroup;
-  pathway?: string;
-  learningArea: LearningArea;
+export const CBC_DIRECTORY_CATALOG: CbcCatalogEntry[] = buildFullDirectoryCatalog();
+
+export interface SubjectStrandOption {
   strand: string;
   subStrand: string;
+  levelHint: string;
+  minGrade: number;
+  maxGrade: number;
   linkedLessonId: string;
-}> = [
-  { grade: 1, levelGroup: 'Lower Primary', learningArea: 'English', strand: 'Listening & Speaking', subStrand: 'Polite Expressions', linkedLessonId: 'g1-eng-reading' },
-  { grade: 2, levelGroup: 'Lower Primary', learningArea: 'Kiswahili', strand: 'Kusikiliza na Kuzungumza', subStrand: 'Msamiati wa Nyumbani', linkedLessonId: 'g2-kisw-msamiati' },
-  { grade: 3, levelGroup: 'Lower Primary', learningArea: 'Creative Arts', strand: 'Performing & Visual Arts', subStrand: 'Kenyan Folk Songs & Rhythm', linkedLessonId: 'g2-kisw-msamiati' },
-  { grade: 4, levelGroup: 'Upper Primary', learningArea: 'Mathematics', strand: 'Numbers', subStrand: 'Fractions in Daily Life', linkedLessonId: 'g4-math-fractions' },
-  { grade: 4, levelGroup: 'Upper Primary', learningArea: 'Science & Technology', strand: 'Living Things', subStrand: 'Plants & Vertebrates', linkedLessonId: 'g5-agri-kitchen-garden' },
-  { grade: 5, levelGroup: 'Upper Primary', learningArea: 'Agriculture & Nutrition', strand: 'Conservation of Resources', subStrand: 'Organic Compost & Sack Gardens', linkedLessonId: 'g5-agri-kitchen-garden' },
-  { grade: 6, levelGroup: 'Upper Primary', learningArea: 'Social Studies', strand: 'Resources & Economic Activities', subStrand: 'Cash Crops & Port Trade', linkedLessonId: 'g6-sst-resources' },
-  { grade: 7, levelGroup: 'Junior School', learningArea: 'Integrated Science', strand: 'Scientific Investigation', subStrand: 'Laboratory Apparatus & Instruments', linkedLessonId: 'g7-sci-apparatus' },
-  { grade: 8, levelGroup: 'Junior School', learningArea: 'Mathematics', strand: 'Algebra', subStrand: 'Linear Equations in One Unknown', linkedLessonId: 'g8-math-algebra' },
-  { grade: 9, levelGroup: 'Junior School', learningArea: 'Social Studies', strand: 'Citizenship & Governance', subStrand: 'Kenyan Constitution & Devolution', linkedLessonId: 'g6-sst-resources' },
-  { grade: 10, levelGroup: 'Senior School', pathway: 'STEM Pathway', learningArea: 'Integrated Science', strand: 'Energy & Sustainability', subStrand: 'Renewable Power Systems', linkedLessonId: 'g10-stem-energy' },
-  { grade: 11, levelGroup: 'Senior School', pathway: 'Social Sciences Pathway', learningArea: 'Social Studies', strand: 'Regional Integration', subStrand: 'East African Community Trade', linkedLessonId: 'g6-sst-resources' },
-  { grade: 12, levelGroup: 'Senior School', pathway: 'Arts & Sports Science', learningArea: 'Creative Arts', strand: 'Digital Media & Design', subStrand: 'Kenyan Cultural Visual Storytelling', linkedLessonId: 'g1-eng-reading' },
-];
+}
+
+export const CBC_SUBJECT_STRANDS: Record<LearningArea, SubjectStrandOption[]> =
+  CBC_CURRICULUM_TREE.reduce(
+    (acc, subject) => {
+      acc[subject.learningArea] = subject.strands.flatMap((st) =>
+        st.subStrands.map((sub) => ({
+          strand: st.strand,
+          subStrand: sub.subStrand,
+          levelHint:
+            sub.minGrade === sub.maxGrade
+              ? `Grade ${sub.minGrade}`
+              : `Grades ${sub.minGrade}–${sub.maxGrade}`,
+          minGrade: sub.minGrade,
+          maxGrade: sub.maxGrade,
+          linkedLessonId: sub.linkedLessonId,
+        }))
+      );
+      return acc;
+    },
+    {} as Record<LearningArea, SubjectStrandOption[]>
+  );
 
 export function generatePairingCode(): string {
   const digits = Math.floor(1000 + Math.random() * 9000);
   return `SOMA-${digits}`;
+}
+
+export function generateTeacherCode(): string {
+  const digits = Math.floor(1000 + Math.random() * 9000);
+  return `TCH-${digits}`;
 }
 
 export const INITIAL_CHILDREN: ChildProfile[] = [

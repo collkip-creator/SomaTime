@@ -14,11 +14,52 @@ export type LearningArea =
   | 'Mathematics'
   | 'English'
   | 'Kiswahili'
+  | 'Environmental Activities'
   | 'Science & Technology'
   | 'Integrated Science'
   | 'Social Studies'
+  | 'Religious Education'
   | 'Agriculture & Nutrition'
-  | 'Creative Arts';
+  | 'Creative Arts'
+  | 'Pre-Technical Studies'
+  | 'Business Studies'
+  | 'Computer Studies'
+  | 'Biology'
+  | 'Chemistry'
+  | 'Physics'
+  | 'History & Citizenship'
+  | 'Geography';
+
+export interface CbcSubStrandNode {
+  subStrand: string;
+  minGrade: number;
+  maxGrade: number;
+  pathway?: string;
+  linkedLessonId: string;
+}
+
+export interface CbcStrandNode {
+  strand: string;
+  subStrands: CbcSubStrandNode[];
+}
+
+export interface CbcSubjectCurriculum {
+  learningArea: LearningArea;
+  minGrade: number;
+  maxGrade: number;
+  pathway?: string;
+  strands: CbcStrandNode[];
+}
+
+export interface CbcCatalogEntry {
+  grade: number;
+  levelGroup: CBCLevelGroup;
+  pathway?: string;
+  learningArea: LearningArea;
+  strand: string;
+  subStrand: string;
+  linkedLessonId: string;
+}
 
 export interface PendingApproval {
   id: string;
@@ -116,15 +157,30 @@ export interface CBCLesson {
   questions: ActivityQuestion[];
 }
 
+export interface TeacherAccount {
+  teacherCode: string;
+  fullName: string;
+  school: string;
+  tscNumber: string;
+  pin: string;
+  subjects: LearningArea[];
+  grade: number;
+  classStream: string;
+  registered: boolean;
+}
+
 export interface TeacherAssignment {
   id: string;
   classStream: string;
+  school?: string;
   grade: number;
   learningArea: LearningArea;
   strand: string;
   subStrand: string;
   lessonId: string;
   title: string;
+  teacherName?: string;
+  teacherCode?: string;
   dueLabel: string;
   pushedAt: string;
   completedByChildIds: string[];

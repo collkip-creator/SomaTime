@@ -9,6 +9,7 @@ import {
   KeyRound,
   Lock,
   Play,
+  Search,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -18,17 +19,18 @@ import {
   Wifi,
 } from 'lucide-react';
 import {
-  ALL_LEARNING_AREAS,
   ASSETS,
   CBC_DIRECTORY_CATALOG,
   CBC_LESSONS,
   getLevelGroupForGrade,
   getSeniorPathwayHint,
+  getSubjectsForGrade,
 } from '../data/cbcCurriculum';
 import { formatTimeClock } from '../hooks/useSomaTimeStore';
 import type {
   CBCLesson,
   CBCRubric,
+  CbcCatalogEntry,
   ChildProfile,
   LearningArea,
   TeacherAssignment,
@@ -80,44 +82,71 @@ export function ChildMode({
   onSelectActiveApp,
   onCompleteLesson,
 }: ChildModeProps) {
-  const [selectedGrade, setSelectedGrade] = useState<number>(child.grade);
   const [selectedArea, setSelectedArea] = useState<LearningArea | 'All'>('All');
+  const [curriculumSearch, setCurriculumSearch] = useState('');
   const [activeLesson, setActiveLesson] = useState<CBCLesson | null>(null);
   const [activeIsPriority, setActiveIsPriority] = useState(false);
   const [lockNotice, setLockNotice] = useState<string>('');
   const learningRef = useRef<HTMLDivElement | null>(null);
 
+  const learnerGrade = child.grade;
   const isPhoneLocked = child.isLocked || child.availableScreenSeconds <= 0;
 
-  // Pending Teacher Assignments (Priority) for this child or school
+  const gradeSubjects = useMemo(() => getSubjectsForGrade(learnerGrade), [learnerGrade]);
+  const effectiveSelectedArea =
+    selectedArea === 'All' || gradeSubjects.includes(selectedArea) ? selectedArea : 'All';
+
+  // Pending Teacher Assignments (Priority) matching this learner's grade
   const priorityAssignments = useMemo(() => {
-    return assignments.filter((a) => !a.completedByChildIds.includes(child.id));
-  }, [assignments, child.id]);
+    return assignments.filter(
+      (a) => a.grade === learnerGrade && !a.completedByChildIds.includes(child.id)
+    );
+  }, [assignments, child.id, learnerGrade]);
 
   const hasPriorityPending = priorityAssignments.length > 0;
 
-  // Check if child completed at least one Mandatory Focus Subject today
+  const gradePlayableLessons = useMemo(() => {
+    return CBC_LESSONS.filter((lesson) => lesson.grade === learnerGrade);
+  }, [learnerGrade]);
+
+  // Check if child completed at least one Mandatory Focus Subject today (when available for their grade)
+  const hasMandatoryLessonForGrade = useMemo(() => {
+    if (child.mandatorySubjects.length === 0) return false;
+    return gradePlayableLessons.some((l) => child.mandatorySubjects.includes(l.learningArea));
+  }, [child.mandatorySubjects, gradePlayableLessons]);
+
   const mandatoryDoneToday = useMemo(() => {
-    if (child.mandatorySubjects.length === 0) return true;
+    if (!hasMandatoryLessonForGrade) return true;
     return child.activityLogs.some((log) =>
       child.mandatorySubjects.includes(log.learningArea)
     );
-  }, [child.activityLogs, child.mandatorySubjects]);
+  }, [child.activityLogs, child.mandatorySubjects, hasMandatoryLessonForGrade]);
+
+  const gradeCatalogTotal = useMemo(() => {
+    return CBC_DIRECTORY_CATALOG.filter((item) => item.grade === learnerGrade);
+  }, [learnerGrade]);
 
   const filteredCatalog = useMemo(() => {
-    return CBC_DIRECTORY_CATALOG.filter((item) => {
-      const gradeMatch = item.grade === selectedGrade;
-      const areaMatch = selectedArea === 'All' || item.learningArea === selectedArea;
-      return gradeMatch && areaMatch;
+    const q = curriculumSearch.trim().toLowerCase();
+    return gradeCatalogTotal.filter((item) => {
+      const areaMatch = effectiveSelectedArea === 'All' || item.learningArea === effectiveSelectedArea;
+      const queryMatch =
+        !q ||
+        item.learningArea.toLowerCase().includes(q) ||
+        item.strand.toLowerCase().includes(q) ||
+        item.subStrand.toLowerCase().includes(q);
+      return areaMatch && queryMatch;
     });
-  }, [selectedGrade, selectedArea]);
+  }, [gradeCatalogTotal, effectiveSelectedArea, curriculumSearch]);
 
   const featuredPlayableLessons = useMemo(() => {
-    return CBC_LESSONS.filter((lesson) => {
-      if (selectedArea !== 'All' && lesson.learningArea !== selectedArea) return false;
+    return gradePlayableLessons.filter((lesson) => {
+      if (effectiveSelectedArea !== 'All' && lesson.learningArea !== effectiveSelectedArea) {
+        return false;
+      }
       return true;
     });
-  }, [selectedArea]);
+  }, [gradePlayableLessons, effectiveSelectedArea]);
 
   const scrollToLearning = () => {
     learningRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -155,9 +184,31 @@ export function ChildMode({
     setActiveLesson(lesson);
   };
 
-  const handleLaunchCatalogEntry = (linkedLessonId: string) => {
-    const found = CBC_LESSONS.find((l) => l.id === linkedLessonId) ?? CBC_LESSONS[0];
-    launchLesson(found, false);
+  const handleLaunchCatalogEntry = (entry: CbcCatalogEntry) => {
+    const base =
+      CBC_LESSONS.find((l) => l.id === entry.linkedLessonId) ??
+      gradePlayableLessons.find((l) => l.learningArea === entry.learningArea) ??
+      CBC_LESSONS.find((l) => l.learningArea === entry.learningArea) ??
+      gradePlayableLessons[0] ??
+      CBC_LESSONS[0];
+
+    const contextualLesson: CBCLesson =
+      base.learningArea === entry.learningArea &&
+      base.strand === entry.strand &&
+      base.subStrand === entry.subStrand
+        ? base
+        : {
+            ...base,
+            title: `${entry.subStrand} Practice`,
+            swahiliTitle: `${entry.subStrand} Practice`,
+            grade: learnerGrade,
+            levelGroup: entry.levelGroup,
+            learningArea: entry.learningArea,
+            strand: entry.strand,
+            subStrand: entry.subStrand,
+          };
+
+    launchLesson(contextualLesson, false);
   };
 
   const handleTapEntertainmentApp = (appName: string) => {
@@ -168,8 +219,8 @@ export function ChildMode({
     onSelectActiveApp(child.id, appName);
   };
 
-  const currentLevelGroup = getLevelGroupForGrade(selectedGrade);
-  const seniorPathway = getSeniorPathwayHint(selectedGrade);
+  const currentLevelGroup = getLevelGroupForGrade(learnerGrade);
+  const seniorPathway = getSeniorPathwayHint(learnerGrade);
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:py-8">
@@ -213,7 +264,7 @@ export function ChildMode({
               <span>Register as Learner (Enter Code)</span>
             </button>
           )}
-          {!handOffActive && childrenList.length > 1 && (
+          {!handOffActive && !child.isPaired && childrenList.length > 1 && (
             <select
               aria-label="Switch active child preview"
               value={child.id}
@@ -230,7 +281,7 @@ export function ChildMode({
               ))}
             </select>
           )}
-          {handOffActive && (
+          {(handOffActive || child.isPaired) && (
             <button
               type="button"
               onClick={onOpenExitHandOff}
@@ -452,7 +503,7 @@ export function ChildMode({
                         className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-white/20"
                       >
                         <KeyRound className="h-3.5 w-3.5" />
-                        <span>Unlock with Parent PIN (1234)</span>
+                        <span>Unlock with Parent PIN ({parentPin})</span>
                       </button>
                     </div>
                   </div>
@@ -543,7 +594,7 @@ export function ChildMode({
                   <div className="absolute inset-0 bg-gradient-to-r from-slate-950/85 via-slate-950/55 to-transparent" />
                   <div className="absolute inset-0 flex flex-col justify-center p-5 sm:p-6">
                     <p className="text-xs font-semibold text-amber-300">
-                      Kenyan CBC Micro-Lessons · Grades 1–12
+                      Kenyan CBC Micro-Lessons · Grade {learnerGrade} ({currentLevelGroup})
                     </p>
                     <h2 className="mt-1 max-w-md font-display text-xl font-extrabold text-white sm:text-2xl">
                       Learn for 5 Minutes, Unlock Screen Time
@@ -584,10 +635,10 @@ export function ChildMode({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <h3 className="font-display text-lg font-bold text-slate-900">
-                      Interactive 5-Minute Activities
+                      Grade {learnerGrade} Interactive 5-Minute Activities
                     </h3>
                     <p className="text-xs text-slate-600">
-                      Playable Kenyan CBC quizzes with guided study hints
+                      Showing only Grade {learnerGrade} Kenyan CBC quizzes with guided study hints
                     </p>
                   </div>
                   <span className="font-mono text-xs font-bold text-emerald-700 tabular-nums">
@@ -654,62 +705,51 @@ export function ChildMode({
                 </div>
               </div>
 
-              {/* Full Grade 1–12 CBC Curriculum Browser */}
+              {/* Grade-Locked CBC Curriculum Browser */}
               <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-6">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h3 className="font-display text-lg font-bold text-slate-900">
-                      Kenyan CBC Curriculum Browser (Grades 1–12)
+                      Grade {learnerGrade} CBC Subjects, Strands &amp; Sub-strands
                     </h3>
                     <p className="text-xs text-slate-600">
                       {currentLevelGroup}
-                      {seniorPathway ? ` · ${seniorPathway}` : ''} · Browse Strands &amp; Sub-strands
+                      {seniorPathway ? ` · ${seniorPathway}` : ''} · {gradeSubjects.length}{' '}
+                      subjects · {gradeCatalogTotal.length} sub-strands loaded
                     </p>
                   </div>
-                  <Smartphone className="h-4 w-4 text-slate-400" />
+                  <div className="relative w-full sm:w-56">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={curriculumSearch}
+                      onChange={(e) => setCurriculumSearch(e.target.value)}
+                      placeholder="Search strand or topic..."
+                      className="min-h-[38px] w-full rounded-xl border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs text-slate-900 focus:border-blue-600 focus:bg-white focus:outline-none"
+                    />
+                  </div>
                 </div>
 
-                {/* Grade 1–12 Selector */}
-                <div className="mt-4 flex gap-1.5 overflow-x-auto pb-1">
-                  {Array.from({ length: 12 }, (_, idx) => idx + 1).map((g) => {
-                    const active = selectedGrade === g;
-                    return (
-                      <button
-                        key={g}
-                        type="button"
-                        onClick={() => setSelectedGrade(g)}
-                        className={`min-h-[40px] shrink-0 rounded-xl border px-3 py-1.5 font-mono text-xs font-bold transition-colors ${
-                          active
-                            ? 'border-emerald-700 bg-emerald-700 text-white'
-                            : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        G{g}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Learning Area Filter */}
+                {/* Grade-Scoped Learning Area Filter */}
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     onClick={() => setSelectedArea('All')}
                     className={`min-h-[36px] rounded-xl border px-3 py-1 text-xs font-semibold transition-colors ${
-                      selectedArea === 'All'
+                      effectiveSelectedArea === 'All'
                         ? 'border-blue-700 bg-blue-50 text-blue-900'
                         : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    All Learning Areas
+                    All Grade {learnerGrade} Subjects ({gradeSubjects.length})
                   </button>
-                  {ALL_LEARNING_AREAS.map((area) => (
+                  {gradeSubjects.map((area) => (
                     <button
                       key={area}
                       type="button"
                       onClick={() => setSelectedArea(area)}
                       className={`min-h-[36px] rounded-xl border px-3 py-1 text-xs font-semibold transition-colors ${
-                        selectedArea === area
+                        effectiveSelectedArea === area
                           ? 'border-blue-700 bg-blue-50 text-blue-900'
                           : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                       }`}
@@ -720,16 +760,16 @@ export function ChildMode({
                 </div>
 
                 {/* Strands & Sub-strands List */}
-                <div className="mt-4 divide-y divide-slate-100">
+                <div className="mt-4 max-h-[480px] overflow-y-auto divide-y divide-slate-100 pr-1">
                   {filteredCatalog.length === 0 ? (
                     <p className="py-4 text-xs text-slate-500">
-                      No strands match this filter in Grade {selectedGrade}. Select &ldquo;All Learning
-                      Areas&rdquo; to view all strands for {currentLevelGroup}.
+                      No strands match this search in Grade {learnerGrade}. Clear search or select
+                      &ldquo;All Grade {learnerGrade} Subjects&rdquo;.
                     </p>
                   ) : (
                     filteredCatalog.map((entry, idx) => (
                       <div
-                        key={`${entry.grade}-${entry.learningArea}-${idx}`}
+                        key={`${entry.grade}-${entry.learningArea}-${entry.strand}-${entry.subStrand}-${idx}`}
                         className="flex flex-col gap-3 py-3.5 sm:flex-row sm:items-center sm:justify-between"
                       >
                         <div>
@@ -744,7 +784,7 @@ export function ChildMode({
                         </div>
                         <button
                           type="button"
-                          onClick={() => handleLaunchCatalogEntry(entry.linkedLessonId)}
+                          onClick={() => handleLaunchCatalogEntry(entry)}
                           className="flex min-h-[42px] shrink-0 items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-xs font-bold text-blue-900 transition-colors hover:bg-blue-100 whitespace-nowrap"
                         >
                           <Play className="h-3.5 w-3.5" />

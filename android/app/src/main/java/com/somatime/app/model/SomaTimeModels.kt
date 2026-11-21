@@ -22,12 +22,47 @@ enum class LearningArea(val displayName: String) {
     MATHEMATICS("Mathematics"),
     ENGLISH("English"),
     KISWAHILI("Kiswahili"),
+    ENVIRONMENTAL_ACTIVITIES("Environmental Activities"),
     SCIENCE_TECH("Science & Technology"),
     INTEGRATED_SCIENCE("Integrated Science"),
     SOCIAL_STUDIES("Social Studies"),
+    RELIGIOUS_EDUCATION("Religious Education"),
     AGRICULTURE_NUTRITION("Agriculture & Nutrition"),
-    CREATIVE_ARTS("Creative Arts")
+    CREATIVE_ARTS("Creative Arts"),
+    PRE_TECHNICAL_STUDIES("Pre-Technical Studies"),
+    BUSINESS_STUDIES("Business Studies"),
+    COMPUTER_STUDIES("Computer Studies"),
+    BIOLOGY("Biology"),
+    CHEMISTRY("Chemistry"),
+    PHYSICS("Physics"),
+    HISTORY_CITIZENSHIP("History & Citizenship"),
+    GEOGRAPHY("Geography")
 }
+
+data class CbcSubStrandNode(
+    val subStrand: String,
+    val minGrade: Int,
+    val maxGrade: Int,
+    val pathway: String? = null,
+    val linkedLessonId: String
+) {
+    val levelHint: String
+        get() = if (minGrade == maxGrade) "Grade $minGrade" else "Grades $minGrade–$maxGrade"
+}
+
+data class CbcStrandNode(
+    val strand: String,
+    val subStrands: List<CbcSubStrandNode>
+)
+
+data class CbcSubjectCurriculum(
+    val learningArea: LearningArea,
+    val minGrade: Int,
+    val maxGrade: Int,
+    val pathway: String? = null,
+    val strands: List<CbcStrandNode>
+)
+
 
 enum class QuestionType {
     MULTIPLE_CHOICE,
@@ -122,15 +157,29 @@ data class ChildProfile(
     val streakDays: Int
 )
 
+data class TeacherAccount(
+    val teacherCode: String,
+    val fullName: String,
+    val school: String,
+    val tscNumber: String = "",
+    val pin: String,
+    val subjects: List<LearningArea>,
+    val grade: Int,
+    val classStream: String
+)
+
 data class TeacherAssignment(
     val id: String,
     val classStream: String,
+    val school: String = "Nairobi Primary School",
     val grade: Int,
     val learningArea: LearningArea,
     val strand: String,
     val subStrand: String,
     val lessonId: String,
     val title: String,
+    val teacherName: String = "Class Teacher",
+    val teacherCode: String = "",
     val dueLabel: String,
     val pushedAt: String,
     val completedByChildIds: List<String>

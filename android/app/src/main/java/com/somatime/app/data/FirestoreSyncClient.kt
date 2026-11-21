@@ -3,6 +3,8 @@ package com.somatime.app.data
 import com.somatime.app.model.ChildProfile
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
+import com.somatime.app.model.TeacherAccount
+import com.somatime.app.model.TeacherAssignment
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
@@ -56,6 +58,34 @@ object FirestoreSyncClient {
         "https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/$DATABASE_ID/documents"
 
     private val PAIRING_CODE_REGEX = Regex("^SOMA-[A-Z0-9]{4,12}$")
+    private val TEACHER_CODE_REGEX = Regex("^TCH-[A-Z0-9]{4,12}$")
+
+    fun normalizeTeacherCode(raw: String): String {
+        val cleaned = raw.trim().uppercase(Locale.US).replace(Regex("[^A-Z0-9-\\s]"), "")
+        if (cleaned.isEmpty()) return ""
+        val collapsed = cleaned.replace(Regex("\\s+"), "-").replace(Regex("-+"), "-")
+        return when {
+            collapsed.startsWith("TCH-") -> collapsed.take(24)
+            collapsed.startsWith("TCH") && collapsed.length > 3 -> {
+                val rest = collapsed.substring(3).trimStart('-')
+                "TCH-$rest".take(24)
+            }
+            Regex("^[A-Z0-9]{4,12}$").matches(collapsed) -> "TCH-$collapsed".take(24)
+            else -> collapsed.take(24)
+        }
+    }
+
+    fun isValidTeacherCode(code: String): Boolean = TEACHER_CODE_REGEX.matches(code)
+
+    fun buildSchoolGradeKey(school: String, grade: Int): String {
+        val safeGrade = grade.coerceIn(1, 12)
+        val slug = school.trim().lowercase(Locale.US)
+            .replace(Regex("[^a-z0-9]+"), "-")
+            .trim('-')
+            .take(100)
+        val finalSlug = if (slug.length >= 2) slug else "nairobi-primary"
+        return "g$safeGrade-$finalSlug"
+    }
 
     fun normalizeCode(raw: String): String {
         val cleaned = raw.trim().uppercase(Locale.US).replace(Regex("[^A-Z0-9-\\s]"), "")
@@ -389,6 +419,298 @@ object FirestoreSyncClient {
                 if (item.isNotEmpty()) add(item)
             }
         }
+    }
+
+    suspend fun registerTeacher(teacher: TeacherAccount): CloudOpResult<TeacherAccount> =
+        withContext(Dispatchers.IO) {
+            val code = normalizeTeacherCode(teacher.teacherCode)
+            if (!isValidTeacherCode(code)) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Teacher code must match TCH-XXXX."
+                )
+            }
+
+            val cleanPin = teacher.pin.filter(Char::isDigit).take(4).let {
+                if (it.length == 4) it else "1234"
+            }
+            val safeSchool = teacher.school.trim().ifEmpty { "Nairobi Primary School" }.take(120)
+            val safeGrade = teacher.grade.coerceIn(1, 12)
+            val safeStream = teacher.classStream.trim()
+                .ifEmpty { "Grade $safeGrade East - $safeSchool" }
+                .take(120)
+            val safeSubjects = (teacher.subjects.ifEmpty { listOf(LearningArea.MATHEMATICS) })
+                .take(8)
+                .map { it.displayName }
+
+            val getUrl = "$BASE_URL/teachers/${enc(code)}?key=${enc(API_KEY)}"
+            val existingRes = request("GET", getUrl, null, patchOverride = false)
+            if (existingRes.code !in 200..299 && existingRes.code != 404) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = existingRes.code,
+                    errorMessage = formatHttpFailure(existingRes)
+                )
+            }
+
+            val isNew = existingRes.code == 404
+            val fields = JSONObject()
+                .put("fullName", strVal(teacher.fullName.trim().ifEmpty { "Teacher" }.take(80)))
+                .put("school", strVal(safeSchool))
+                .put("tscNumber", strVal(teacher.tscNumber.trim().take(40)))
+                .put("teacherPin", strVal(cleanPin))
+                .put("subjects", strArrayVal(safeSubjects))
+                .put("grade", intVal(safeGrade))
+                .put("classStream", strVal(safeStream))
+                .put("updatedAt", strVal(nowIso()))
+            if (isNew) {
+                fields.put("teacherCode", strVal(code))
+                fields.put("ownerUid", strVal("device_teacher"))
+            }
+
+            val body = JSONObject().put("fields", fields).toString()
+            val res = if (isNew) {
+                val url = "$BASE_URL/teachers?documentId=${enc(code)}&key=${enc(API_KEY)}"
+                request("POST", url, body, patchOverride = false)
+            } else {
+                val updateFields = listOf(
+                    "fullName", "school", "tscNumber", "teacherPin",
+                    "subjects", "grade", "classStream", "updatedAt"
+                )
+                val maskParams = updateFields.joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
+                val url = "$BASE_URL/teachers/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
+                request("POST", url, body, patchOverride = true)
+            }
+
+            if (res.code in 200..299) {
+                CloudOpResult(
+                    ok = true,
+                    data = teacher.copy(
+                        teacherCode = code,
+                        school = safeSchool,
+                        pin = cleanPin,
+                        grade = safeGrade,
+                        classStream = safeStream
+                    ),
+                    httpCode = res.code
+                )
+            } else {
+                CloudOpResult(ok = false, httpCode = res.code, errorMessage = formatHttpFailure(res))
+            }
+        }
+
+    suspend fun loginTeacher(rawCode: String, rawPin: String): CloudOpResult<TeacherAccount> =
+        withContext(Dispatchers.IO) {
+            val code = normalizeTeacherCode(rawCode)
+            val pin = rawPin.filter(Char::isDigit).take(4)
+            if (!isValidTeacherCode(code)) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Enter a valid Teacher Code like TCH-4821."
+                )
+            }
+            if (pin.length != 4) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Enter your 4-digit Teacher PIN."
+                )
+            }
+
+            val url = "$BASE_URL/teachers/${enc(code)}?key=${enc(API_KEY)}"
+            val res = request("GET", url, null, patchOverride = false)
+            if (res.code == 404) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = 404,
+                    errorMessage = "No teacher account found for \"$code\". Register first to get a Teacher Code."
+                )
+            }
+            if (res.code !in 200..299 || res.body.isBlank()) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = res.code,
+                    errorMessage = formatHttpFailure(res)
+                )
+            }
+
+            val root = runCatching { JSONObject(res.body) }.getOrNull()
+                ?: return@withContext CloudOpResult(ok = false, errorMessage = "Malformed cloud response.")
+            val fields = root.optJSONObject("fields")
+                ?: return@withContext CloudOpResult(ok = false, errorMessage = "Missing teacher profile fields.")
+
+            val savedPin = readStr(fields, "teacherPin", "")
+            if (savedPin != pin) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Incorrect 4-digit Teacher PIN for $code."
+                )
+            }
+
+            val subjectNames = readStrArray(fields, "subjects")
+            val subjects = subjectNames.mapNotNull { label ->
+                LearningArea.entries.firstOrNull { it.displayName == label }
+            }.ifEmpty { listOf(LearningArea.MATHEMATICS) }
+
+            val account = TeacherAccount(
+                teacherCode = readStr(fields, "teacherCode", code),
+                fullName = readStr(fields, "fullName", "Teacher"),
+                school = readStr(fields, "school", "Nairobi Primary School"),
+                tscNumber = readStr(fields, "tscNumber", ""),
+                pin = savedPin,
+                subjects = subjects,
+                grade = readInt(fields, "grade", 6).coerceIn(1, 12),
+                classStream = readStr(fields, "classStream", "Grade 6 East"),
+            )
+            CloudOpResult(ok = true, data = account, httpCode = res.code)
+        }
+
+    suspend fun publishSchoolGradeAssignment(
+        assignment: TeacherAssignment,
+        schoolName: String
+    ): CloudOpResult<Boolean> = withContext(Dispatchers.IO) {
+        val safeSchool = schoolName.trim().ifEmpty { assignment.school }.ifEmpty { "Nairobi Primary School" }.take(120)
+        val safeGrade = assignment.grade.coerceIn(1, 12)
+        val key = buildSchoolGradeKey(safeSchool, safeGrade)
+
+        val getUrl = "$BASE_URL/school_assignments/${enc(key)}?key=${enc(API_KEY)}"
+        val existingRes = request("GET", getUrl, null, patchOverride = false)
+        if (existingRes.code !in 200..299 && existingRes.code != 404) {
+            return@withContext CloudOpResult(
+                ok = false,
+                httpCode = existingRes.code,
+                errorMessage = formatHttpFailure(existingRes)
+            )
+        }
+
+        val isNew = existingRes.code == 404
+        val prevValues = if (!isNew && existingRes.body.isNotBlank()) {
+            runCatching {
+                JSONObject(existingRes.body)
+                    .optJSONObject("fields")
+                    ?.optJSONObject("recentAssignments")
+                    ?.optJSONObject("arrayValue")
+                    ?.optJSONArray("values")
+            }.getOrNull()
+        } else {
+            null
+        }
+
+        val newMapFields = JSONObject()
+            .put("id", strVal(assignment.id.take(80)))
+            .put("classStream", strVal(assignment.classStream.take(120)))
+            .put("school", strVal(safeSchool))
+            .put("grade", intVal(safeGrade))
+            .put("learningArea", strVal(assignment.learningArea.displayName))
+            .put("strand", strVal(assignment.strand.take(120)))
+            .put("subStrand", strVal(assignment.subStrand.take(120)))
+            .put("lessonId", strVal(assignment.lessonId.take(80)))
+            .put("title", strVal(assignment.title.take(140)))
+            .put("teacherName", strVal(assignment.teacherName.ifEmpty { "Class Teacher" }.take(80)))
+            .put("teacherCode", strVal(assignment.teacherCode.ifEmpty { "TCH-0000" }.take(24)))
+            .put("dueLabel", strVal(assignment.dueLabel.take(80)))
+            .put("pushedAt", strVal(assignment.pushedAt.take(40)))
+        val newEntry = JSONObject().put("mapValue", JSONObject().put("fields", newMapFields))
+
+        val nextValues = JSONArray().apply {
+            put(newEntry)
+            if (prevValues != null) {
+                for (i in 0 until prevValues.length()) {
+                    if (length() >= 12) break
+                    val existingItem = prevValues.optJSONObject(i) ?: continue
+                    val existingId = existingItem
+                        .optJSONObject("mapValue")
+                        ?.optJSONObject("fields")
+                        ?.optJSONObject("id")
+                        ?.optString("stringValue", "")
+                    if (existingId != assignment.id) {
+                        put(existingItem)
+                    }
+                }
+            }
+        }
+
+        val fields = JSONObject()
+            .put("school", strVal(safeSchool))
+            .put("recentAssignments", JSONObject().put("arrayValue", JSONObject().put("values", nextValues)))
+            .put("updatedAt", strVal(nowIso()))
+        if (isNew) {
+            fields.put("schoolGradeKey", strVal(key))
+            fields.put("grade", intVal(safeGrade))
+        }
+
+        val body = JSONObject().put("fields", fields).toString()
+        val res = if (isNew) {
+            val url = "$BASE_URL/school_assignments?documentId=${enc(key)}&key=${enc(API_KEY)}"
+            request("POST", url, body, patchOverride = false)
+        } else {
+            val maskParams = listOf("school", "recentAssignments", "updatedAt")
+                .joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
+            val url = "$BASE_URL/school_assignments/${enc(key)}?$maskParams&key=${enc(API_KEY)}"
+            request("POST", url, body, patchOverride = true)
+        }
+
+        if (res.code in 200..299) {
+            CloudOpResult(ok = true, data = true, httpCode = res.code)
+        } else {
+            CloudOpResult(ok = false, httpCode = res.code, errorMessage = formatHttpFailure(res))
+        }
+    }
+
+    suspend fun fetchSchoolGradeAssignments(
+        schoolName: String,
+        grade: Int
+    ): CloudOpResult<List<TeacherAssignment>> = withContext(Dispatchers.IO) {
+        val key = buildSchoolGradeKey(schoolName, grade)
+        val url = "$BASE_URL/school_assignments/${enc(key)}?key=${enc(API_KEY)}"
+        val res = request("GET", url, null, patchOverride = false)
+        if (res.code == 404) {
+            return@withContext CloudOpResult(ok = true, data = emptyList(), httpCode = 404)
+        }
+        if (res.code !in 200..299 || res.body.isBlank()) {
+            return@withContext CloudOpResult(
+                ok = false,
+                httpCode = res.code,
+                errorMessage = formatHttpFailure(res)
+            )
+        }
+
+        val root = runCatching { JSONObject(res.body) }.getOrNull()
+            ?: return@withContext CloudOpResult(ok = false, errorMessage = "Malformed response")
+        val values = root.optJSONObject("fields")
+            ?.optJSONObject("recentAssignments")
+            ?.optJSONObject("arrayValue")
+            ?.optJSONArray("values")
+            ?: return@withContext CloudOpResult(ok = true, data = emptyList(), httpCode = res.code)
+
+        val list = buildList {
+            for (i in 0 until values.length()) {
+                val f = values.optJSONObject(i)
+                    ?.optJSONObject("mapValue")
+                    ?.optJSONObject("fields") ?: continue
+                val areaLabel = readStr(f, "learningArea", "Mathematics")
+                val area = LearningArea.entries.firstOrNull { it.displayName == areaLabel }
+                    ?: LearningArea.MATHEMATICS
+                add(
+                    TeacherAssignment(
+                        id = readStr(f, "id", "assign-$i"),
+                        classStream = readStr(f, "classStream", "Grade $grade East"),
+                        school = readStr(f, "school", schoolName),
+                        grade = readInt(f, "grade", grade).coerceIn(1, 12),
+                        learningArea = area,
+                        strand = readStr(f, "strand", "Numbers"),
+                        subStrand = readStr(f, "subStrand", "Core Strand"),
+                        lessonId = readStr(f, "lessonId", "g4-math-fractions"),
+                        title = readStr(f, "title", "Teacher Priority Assignment"),
+                        teacherName = readStr(f, "teacherName", "Class Teacher"),
+                        teacherCode = readStr(f, "teacherCode", ""),
+                        dueLabel = readStr(f, "dueLabel", "Priority · Complete First"),
+                        pushedAt = readStr(f, "pushedAt", "Today"),
+                        completedByChildIds = emptyList()
+                    )
+                )
+            }
+        }
+        CloudOpResult(ok = true, data = list, httpCode = res.code)
     }
 
     private fun enc(v: String): String = URLEncoder.encode(v, "UTF-8")
