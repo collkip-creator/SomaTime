@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BatteryCharging,
   BookOpen,
@@ -11,7 +11,6 @@ import {
   Play,
   Search,
   ShieldCheck,
-  Smartphone,
   Sparkles,
   Tv,
   Unlock,
@@ -22,9 +21,11 @@ import {
   ASSETS,
   CBC_DIRECTORY_CATALOG,
   CBC_LESSONS,
+  getCatalogTrackingKey,
   getLevelGroupForGrade,
   getSeniorPathwayHint,
   getSubjectsForGrade,
+  pickNextUnseenAssignment,
 } from '../data/cbcCurriculum';
 import { formatTimeClock } from '../hooks/useSomaTimeStore';
 import type {
@@ -43,12 +44,20 @@ interface ChildModeProps {
   handOffActive: boolean;
   parentPin: string;
   assignments: TeacherAssignment[];
+  displayedKeys: string[];
+  displayedQuizIds: string[];
   onSelectChild: (id: string) => void;
   onSimulateTimeExpired: (id: string) => void;
   onOpenPinUnlock: () => void;
   onOpenExitHandOff: () => void;
   onOpenPairSetup: () => void;
   onSelectActiveApp: (id: string, appName: string | null) => void;
+  onRecordDisplayedAssignment: (
+    childId: string,
+    trackingKey: string,
+    quizId: string,
+    resetCatCycle?: boolean
+  ) => void;
   onCompleteLesson: (
     childId: string,
     lesson: CBCLesson,
@@ -74,12 +83,15 @@ export function ChildMode({
   handOffActive,
   parentPin,
   assignments,
+  displayedKeys,
+  displayedQuizIds,
   onSelectChild,
   onSimulateTimeExpired,
   onOpenPinUnlock,
   onOpenExitHandOff,
   onOpenPairSetup,
   onSelectActiveApp,
+  onRecordDisplayedAssignment,
   onCompleteLesson,
 }: ChildModeProps) {
   const [selectedArea, setSelectedArea] = useState<LearningArea | 'All'>('All');
@@ -87,7 +99,10 @@ export function ChildMode({
   const [activeLesson, setActiveLesson] = useState<CBCLesson | null>(null);
   const [activeIsPriority, setActiveIsPriority] = useState(false);
   const [lockNotice, setLockNotice] = useState<string>('');
+  const [resumedBanner, setResumedBanner] = useState<string>('');
   const learningRef = useRef<HTMLDivElement | null>(null);
+  const prevChildIdRef = useRef<string>(child.id);
+  const wasLockedRef = useRef<boolean>(false);
 
   const learnerGrade = child.grade;
   const isPhoneLocked = child.isLocked || child.availableScreenSeconds <= 0;
@@ -148,41 +163,113 @@ export function ChildMode({
     });
   }, [gradePlayableLessons, effectiveSelectedArea]);
 
-  const scrollToLearning = () => {
+  const scrollToLearning = useCallback(() => {
     learningRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  }, []);
 
-  const launchLesson = (lesson: CBCLesson, isPriority = false) => {
-    // Enforce Teacher Priority Assignment first if another priority task exists
-    if (hasPriorityPending && !isPriority) {
-      const firstPriority = priorityAssignments[0];
-      if (firstPriority.lessonId !== lesson.id) {
+  const launchLesson = useCallback(
+    (
+      lesson: CBCLesson,
+      isPriority = false,
+      trackingMeta?: { key: string; quizId: string; resetCatCycle?: boolean }
+    ) => {
+      // Enforce Teacher Priority Assignment first if another priority task exists
+      if (hasPriorityPending && !isPriority) {
+        const firstPriority = priorityAssignments[0];
+        if (firstPriority.lessonId !== lesson.id) {
+          setLockNotice(
+            `Complete your Teacher Priority Assignment ("${firstPriority.title}") first before unlocking regular lessons.`
+          );
+          return;
+        }
+      }
+
+      // Enforce Parent Mandatory Focus Subjects before free-choice areas
+      if (
+        !isPriority &&
+        !mandatoryDoneToday &&
+        child.mandatorySubjects.length > 0 &&
+        !child.mandatorySubjects.includes(lesson.learningArea)
+      ) {
         setLockNotice(
-          `Complete your Teacher Priority Assignment ("${firstPriority.title}") first before unlocking regular lessons.`
+          `Mandatory Focus Rule: Complete a ${child.mandatorySubjects.join(
+            ' or '
+          )} activity first before free-choice ${lesson.learningArea}.`
         );
         return;
       }
-    }
 
-    // Enforce Parent Mandatory Focus Subjects before free-choice areas
-    if (
-      !isPriority &&
-      !mandatoryDoneToday &&
-      child.mandatorySubjects.length > 0 &&
-      !child.mandatorySubjects.includes(lesson.learningArea)
-    ) {
-      setLockNotice(
-        `Mandatory Focus Rule: Complete a ${child.mandatorySubjects.join(
-          ' or '
-        )} activity first before free-choice ${lesson.learningArea}.`
-      );
+      setLockNotice('');
+      setResumedBanner('');
+      if (trackingMeta) {
+        onRecordDisplayedAssignment(
+          child.id,
+          trackingMeta.key,
+          trackingMeta.quizId,
+          Boolean(trackingMeta.resetCatCycle)
+        );
+      } else {
+        onRecordDisplayedAssignment(
+          child.id,
+          getCatalogTrackingKey(lesson.grade, lesson.learningArea, lesson.strand, lesson.subStrand),
+          lesson.id,
+          false
+        );
+      }
+      setActiveIsPriority(isPriority);
+      setActiveLesson(lesson);
+    },
+    [
+      child.id,
+      child.mandatorySubjects,
+      hasPriorityPending,
+      mandatoryDoneToday,
+      onRecordDisplayedAssignment,
+      priorityAssignments,
+    ]
+  );
+
+  // Immediately auto-launch a random unseen assignment whenever the app locks / pins
+  useEffect(() => {
+    if (prevChildIdRef.current !== child.id) {
+      prevChildIdRef.current = child.id;
+      wasLockedRef.current = false;
+      setActiveLesson(null);
       return;
     }
 
-    setLockNotice('');
-    setActiveIsPriority(isPriority);
-    setActiveLesson(lesson);
-  };
+    if (isPhoneLocked && activeLesson === null) {
+      const picked = pickNextUnseenAssignment({
+        child,
+        pendingAssignments: priorityAssignments,
+        displayedKeys,
+        displayedQuizIds,
+      });
+      onRecordDisplayedAssignment(
+        child.id,
+        picked.trackingKey,
+        picked.quizId,
+        picked.wrappedCycle
+      );
+      setLockNotice('');
+      setResumedBanner('');
+      setActiveIsPriority(picked.isPriority);
+      setActiveLesson(picked.lesson);
+      if (!wasLockedRef.current) {
+        wasLockedRef.current = true;
+      }
+    } else if (!isPhoneLocked) {
+      wasLockedRef.current = false;
+    }
+  }, [
+    activeLesson,
+    child,
+    displayedKeys,
+    displayedQuizIds,
+    isPhoneLocked,
+    onRecordDisplayedAssignment,
+    priorityAssignments,
+  ]);
 
   const handleLaunchCatalogEntry = (entry: CbcCatalogEntry) => {
     const base =
@@ -208,7 +295,10 @@ export function ChildMode({
             subStrand: entry.subStrand,
           };
 
-    launchLesson(contextualLesson, false);
+    launchLesson(contextualLesson, false, {
+      key: getCatalogTrackingKey(learnerGrade, entry.learningArea, entry.strand, entry.subStrand),
+      quizId: base.id,
+    });
   };
 
   const handleTapEntertainmentApp = (appName: string) => {
@@ -354,6 +444,12 @@ export function ChildMode({
                     </p>
                   </div>
 
+                  {resumedBanner && !isPhoneLocked && (
+                    <div className="mt-2 rounded-xl border border-emerald-400/50 bg-emerald-500/20 px-3 py-1.5 text-[11px] font-semibold text-emerald-100">
+                      {resumedBanner}
+                    </div>
+                  )}
+
                   {!isPhoneLocked && child.activeAppName && (
                     <p className="mt-2 text-xs text-amber-200">
                       Running: <strong>{child.activeAppName}</strong> · Timer counting down
@@ -444,7 +540,7 @@ export function ChildMode({
                   <div className="flex items-center justify-between pt-3 text-xs text-emerald-200">
                     <span className="flex items-center gap-1.5 font-semibold">
                       <ShieldCheck className="h-4 w-4 text-emerald-400" />
-                      SomaTime Guard Active
+                      App Pinned · Guard Active
                     </span>
                     <span className="font-mono font-bold text-amber-300 tabular-nums">00:00</span>
                   </div>
@@ -454,47 +550,44 @@ export function ChildMode({
                       <Lock className="h-8 w-8" />
                     </div>
                     <h2 className="mt-4 font-display text-2xl font-extrabold text-white">
-                      Screen Time Expired!
+                      {activeIsPriority ? 'Priority Assignment Pinned' : 'Assignment Auto-Loaded'}
                     </h2>
                     <p className="mt-1.5 text-sm text-emerald-100">
-                      Screen time is paused at <span className="font-mono font-bold">00:00</span>.
-                      Complete one 5-minute Kenyan CBC activity to unlock{' '}
-                      <strong className="text-amber-300">+{child.exchangeRateMins} mins</strong>.
+                      {child.lastInterruptedAppName ? (
+                        <>
+                          Paused <strong className="text-amber-300">{child.lastInterruptedAppName}</strong>{' '}
+                          at <span className="font-mono font-bold">00:00</span>. Complete the live quiz to
+                          unlock <strong className="text-amber-300">+{child.exchangeRateMins} mins</strong>{' '}
+                          and auto-resume.
+                        </>
+                      ) : (
+                        <>
+                          Screen time paused at <span className="font-mono font-bold">00:00</span>.
+                          Complete the live quiz to unlock{' '}
+                          <strong className="text-amber-300">+{child.exchangeRateMins} mins</strong>.
+                        </>
+                      )}
                     </p>
 
-                    {hasPriorityPending && (
-                      <div className="mt-4 rounded-2xl border border-amber-400/50 bg-amber-400/15 p-3 text-left text-xs text-amber-100">
-                        <p className="font-bold text-amber-300">
-                          Teacher Assignment (Priority)
+                    {activeLesson && (
+                      <div className="mt-4 rounded-2xl border border-emerald-400/50 bg-emerald-400/15 p-3 text-left text-xs text-emerald-100">
+                        <p className="font-bold text-emerald-300">
+                          {activeIsPriority
+                            ? 'Teacher Priority Assignment · Live'
+                            : `${activeLesson.learningArea} · ${activeLesson.strand}`}
                         </p>
-                        <p className="mt-0.5">{priorityAssignments[0].title}</p>
+                        <p className="mt-0.5 font-semibold text-white">{activeLesson.title}</p>
                       </div>
                     )}
 
                     <div className="mt-5 space-y-2.5">
                       <button
                         type="button"
-                        onClick={() => {
-                          if (hasPriorityPending) {
-                            const assign = priorityAssignments[0];
-                            const lesson =
-                              CBC_LESSONS.find((l) => l.id === assign.lessonId) ?? CBC_LESSONS[0];
-                            launchLesson(lesson, true);
-                          } else {
-                            const suggested =
-                              CBC_LESSONS.find((l) => l.grade === child.grade) ?? CBC_LESSONS[0];
-                            launchLesson(suggested, false);
-                          }
-                          scrollToLearning();
-                        }}
+                        onClick={scrollToLearning}
                         className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-extrabold text-slate-950 transition-colors hover:bg-emerald-400"
                       >
                         <Sparkles className="h-4 w-4" />
-                        <span>
-                          {hasPriorityPending
-                            ? 'Start Teacher Assignment (+15m)'
-                            : `Start CBC Lesson (+${child.exchangeRateMins}m)`}
-                        </span>
+                        <span>Answer Pinned Assignment (+{child.exchangeRateMins}m)</span>
                       </button>
 
                       <button
@@ -509,7 +602,7 @@ export function ChildMode({
                   </div>
 
                   <p className="text-center text-[11px] text-slate-300">
-                    Entertainment apps stay locked until learning or Parent PIN
+                    Unpins &amp; resumes {child.lastInterruptedAppName || 'apps'} automatically on completion
                   </p>
                 </div>
               )}
@@ -523,6 +616,16 @@ export function ChildMode({
           aria-label="Kenyan CBC learning zone"
           className="space-y-5 lg:col-span-7"
         >
+          {/* Auto-Minimized & Resumed Banner */}
+          {resumedBanner && (
+            <div
+              role="status"
+              className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-semibold text-emerald-950"
+            >
+              {resumedBanner}
+            </div>
+          )}
+
           {/* Teacher Priority Notification Banner */}
           {hasPriorityPending && !activeLesson && (
             <div className="rounded-3xl border border-amber-300 bg-amber-50 p-5">
@@ -547,10 +650,21 @@ export function ChildMode({
                 <button
                   type="button"
                   onClick={() => {
+                    const assign = priorityAssignments[0];
                     const target =
-                      CBC_LESSONS.find((l) => l.id === priorityAssignments[0].lessonId) ??
-                      CBC_LESSONS[0];
-                    launchLesson(target, true);
+                      CBC_LESSONS.find((l) => l.id === assign.lessonId) ?? CBC_LESSONS[0];
+                    launchLesson(
+                      {
+                        ...target,
+                        title: assign.title || target.title,
+                        grade: assign.grade,
+                        learningArea: assign.learningArea,
+                        strand: assign.strand,
+                        subStrand: assign.subStrand,
+                      },
+                      true,
+                      { key: `assign:${assign.id}`, quizId: target.id }
+                    );
                   }}
                   className="flex min-h-[46px] shrink-0 items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 whitespace-nowrap"
                 >
@@ -573,10 +687,19 @@ export function ChildMode({
 
           {activeLesson ? (
             <LessonPlayer
+              key={`${activeLesson.id}-${activeLesson.strand}-${activeLesson.subStrand}`}
               lesson={activeLesson}
               exchangeRateMins={child.exchangeRateMins}
               requireParentApproval={child.requireParentApproval}
               isTeacherPriority={activeIsPriority}
+              isPinnedLock={isPhoneLocked}
+              resumedAppName={child.lastInterruptedAppName || child.activeAppName || 'YouTube'}
+              onOpenPinUnlock={onOpenPinUnlock}
+              onAutoMinimized={(appName) => {
+                setResumedBanner(
+                  `SomaTime minimized · ${appName || 'YouTube'} resumed where it was interrupted (+${child.exchangeRateMins} mins unlocked).`
+                );
+              }}
               onComplete={(score) => onCompleteLesson(child.id, activeLesson, score)}
               onExit={() => setActiveLesson(null)}
             />

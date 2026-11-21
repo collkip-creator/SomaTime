@@ -631,6 +631,129 @@ object CbcCurriculumRepository {
         return "TCH-$num"
     }
 
+    data class PickedAssignmentResult(
+        val lesson: CBCLesson,
+        val isPriority: Boolean,
+        val trackingKey: String,
+        val quizId: String,
+        val wrappedCycle: Boolean
+    )
+
+    fun catalogTrackingKey(
+        grade: Int,
+        learningArea: LearningArea,
+        strand: String,
+        subStrand: String
+    ): String = "cat:$grade:${learningArea.name}:$strand:$subStrand"
+
+    fun pickNextUnseenAssignment(
+        child: ChildProfile,
+        pendingAssignments: List<TeacherAssignment>,
+        displayedKeys: List<String>,
+        displayedQuizIds: List<String>
+    ): PickedAssignmentResult {
+        val learnerGrade = child.grade
+
+        // 1. Prioritize pending Teacher Assignments for the learner's grade
+        if (pendingAssignments.isNotEmpty()) {
+            val lastAssignKey = displayedKeys.lastOrNull { it.startsWith("assign:") }
+            val unseenAssigns = pendingAssignments.filter { "assign:${it.id}" !in displayedKeys }
+            val pool = when {
+                unseenAssigns.isNotEmpty() -> unseenAssigns
+                else -> pendingAssignments.filter { "assign:${it.id}" != lastAssignKey }.ifEmpty { pendingAssignments }
+            }
+            val chosen = pool.random()
+            val base = lessons.firstOrNull { it.id == chosen.lessonId }
+                ?: lessons.firstOrNull { it.grade == learnerGrade && it.learningArea == chosen.learningArea }
+                ?: lessons.firstOrNull { it.learningArea == chosen.learningArea }
+                ?: lessons.first()
+
+            val contextual = base.copy(
+                title = chosen.title.ifBlank { "${chosen.subStrand} (${base.title})" },
+                grade = chosen.grade,
+                levelGroup = levelGroupForGrade(chosen.grade),
+                learningArea = chosen.learningArea,
+                strand = chosen.strand,
+                subStrand = chosen.subStrand
+            )
+
+            return PickedAssignmentResult(
+                lesson = contextual,
+                isPriority = true,
+                trackingKey = "assign:${chosen.id}",
+                quizId = base.id,
+                wrappedCycle = false
+            )
+        }
+
+        // 2. Pick randomly from unseen grade-scoped CBC strands & quizzes
+        val gradeCatalog = catalog.filter { it.grade == learnerGrade }
+        val mandatoryAvailable = child.mandatorySubjects.isNotEmpty() &&
+            gradeCatalog.any { it.learningArea in child.mandatorySubjects }
+        val mandatoryDone = !mandatoryAvailable ||
+            child.activityLogs.any { it.learningArea in child.mandatorySubjects }
+
+        val pool = if (!mandatoryDone && mandatoryAvailable) {
+            gradeCatalog.filter { it.learningArea in child.mandatorySubjects }
+        } else {
+            gradeCatalog
+        }.ifEmpty { catalog }
+
+        val lastCatKey = displayedKeys.lastOrNull { it.startsWith("cat:") }
+        val lastQuizId = displayedQuizIds.lastOrNull()
+
+        fun keyOf(e: CbcCatalogEntry) = catalogTrackingKey(learnerGrade, e.learningArea, e.strand, e.subStrand)
+
+        val tier1 = pool.filter { keyOf(it) !in displayedKeys && it.linkedLessonId !in displayedQuizIds }
+        val tier2 = pool.filter { keyOf(it) !in displayedKeys && it.linkedLessonId != lastQuizId }
+        val tier3 = pool.filter { keyOf(it) !in displayedKeys }
+        val tier4NoRepeat = pool.filter { keyOf(it) != lastCatKey && it.linkedLessonId != lastQuizId }
+        val tier4DiffKey = pool.filter { keyOf(it) != lastCatKey }
+
+        val candidates = when {
+            tier1.isNotEmpty() -> tier1
+            tier2.isNotEmpty() -> tier2
+            tier3.isNotEmpty() -> tier3
+            tier4NoRepeat.isNotEmpty() -> tier4NoRepeat
+            tier4DiffKey.isNotEmpty() -> tier4DiffKey
+            else -> pool
+        }
+
+        val wrappedCycle = tier1.isEmpty() && tier2.isEmpty() && tier3.isEmpty()
+        val chosenEntry = candidates.random()
+
+        val base = lessons.firstOrNull { it.id == chosenEntry.linkedLessonId }
+            ?: lessons.firstOrNull { it.grade == learnerGrade && it.learningArea == chosenEntry.learningArea }
+            ?: lessons.firstOrNull { it.learningArea == chosenEntry.learningArea }
+            ?: lessons.first()
+
+        val contextual = if (
+            base.learningArea == chosenEntry.learningArea &&
+            base.strand == chosenEntry.strand &&
+            base.subStrand == chosenEntry.subStrand &&
+            base.grade == learnerGrade
+        ) {
+            base
+        } else {
+            base.copy(
+                title = "${chosenEntry.subStrand} Practice",
+                grade = learnerGrade,
+                levelGroup = chosenEntry.levelGroup,
+                learningArea = chosenEntry.learningArea,
+                strand = chosenEntry.strand,
+                subStrand = chosenEntry.subStrand
+            )
+        }
+
+        return PickedAssignmentResult(
+            lesson = contextual,
+            isPriority = false,
+            trackingKey = keyOf(chosenEntry),
+            quizId = base.id,
+            wrappedCycle = wrappedCycle
+        )
+    }
+
     fun initialChildren(): List<ChildProfile> = listOf(
         ChildProfile(
             id = "amina",

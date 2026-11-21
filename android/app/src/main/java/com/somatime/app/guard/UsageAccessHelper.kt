@@ -102,6 +102,33 @@ object UsageAccessHelper {
         runCatching { context.startActivity(intent) }
     }
 
+    fun getDefaultLauncherPackage(context: Context): String? {
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+        }
+        return runCatching {
+            context.packageManager.resolveActivity(homeIntent, 0)?.activityInfo?.packageName
+        }.getOrNull()
+    }
+
+    fun isTrackableInterruptedApp(context: Context, packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        if (packageName == context.packageName) return false
+        if (packageName == "com.android.systemui") return false
+        if (packageName == "com.android.settings") return false
+        if (packageName == "screen_timer_expired") return false
+        if (packageName == getDefaultLauncherPackage(context)) return false
+        return true
+    }
+
+    fun getAppDisplayLabel(context: Context, packageName: String?): String? {
+        if (packageName.isNullOrBlank()) return null
+        return runCatching {
+            val info = context.packageManager.getApplicationInfo(packageName, 0)
+            context.packageManager.getApplicationLabel(info).toString()
+        }.getOrNull() ?: packageName
+    }
+
     fun getForegroundPackageName(context: Context): String? {
         if (!hasUsageStatsPermission(context)) return null
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager

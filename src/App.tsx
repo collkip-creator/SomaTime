@@ -118,6 +118,8 @@ export default function App() {
           handOffActive={store.handOffActive}
           parentPin={store.parentAccount.pin}
           assignments={store.assignments}
+          displayedKeys={store.displayedKeysByChild[store.selectedChild.id] ?? []}
+          displayedQuizIds={store.displayedQuizIdsByChild[store.selectedChild.id] ?? []}
           onSelectChild={store.setSelectedChildId}
           onSimulateTimeExpired={store.simulateTimeExpired}
           onOpenPinUnlock={() => setPinIntent({ kind: 'unlock_child' })}
@@ -126,6 +128,7 @@ export default function App() {
           }
           onOpenPairSetup={() => openSetup('learner')}
           onSelectActiveApp={store.selectActiveApp}
+          onRecordDisplayedAssignment={store.recordDisplayedAssignment}
           onCompleteLesson={store.completeLesson}
         />
       )}

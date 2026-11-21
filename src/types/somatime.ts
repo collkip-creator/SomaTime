@@ -109,6 +109,7 @@ export interface ChildProfile {
   learnedMinutesToday: number;
   isLocked: boolean;
   activeAppName: string | null;
+  lastInterruptedAppName?: string | null;
   completedLessonIds: string[];
   pendingApprovals: PendingApproval[];
   activityLogs: ChildActivityLog[];

@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Award,
   CheckCircle2,
   Clock,
   HelpCircle,
+  KeyRound,
+  ShieldCheck,
   Sparkles,
   XCircle,
 } from 'lucide-react';
@@ -15,6 +17,10 @@ interface LessonPlayerProps {
   exchangeRateMins: number;
   requireParentApproval: boolean;
   isTeacherPriority: boolean;
+  isPinnedLock?: boolean;
+  resumedAppName?: string | null;
+  onOpenPinUnlock?: () => void;
+  onAutoMinimized?: (appName: string | null) => void;
   onComplete: (scorePercent: number) => {
     minutesEarned: number;
     rubric: CBCRubric;
@@ -29,6 +35,10 @@ export function LessonPlayer({
   exchangeRateMins,
   requireParentApproval,
   isTeacherPriority,
+  isPinnedLock = false,
+  resumedAppName = null,
+  onOpenPinUnlock,
+  onAutoMinimized,
   onComplete,
   onExit,
 }: LessonPlayerProps) {
@@ -124,7 +134,21 @@ export function LessonPlayer({
     }
   };
 
+  const shouldAutoMinimize = Boolean(
+    rewardSummary && !rewardSummary.queuedForApproval && !rewardSummary.cappedOut
+  );
+
+  useEffect(() => {
+    if (!shouldAutoMinimize) return;
+    const timer = window.setTimeout(() => {
+      onAutoMinimized?.(resumedAppName);
+      onExit();
+    }, 1400);
+    return () => window.clearTimeout(timer);
+  }, [shouldAutoMinimize, onAutoMinimized, onExit, resumedAppName]);
+
   if (rewardSummary) {
+    const resumeTarget = resumedAppName || 'Previous App';
     return (
       <div className="rounded-3xl border border-emerald-200 bg-white p-6 sm:p-8">
         <div className="mx-auto max-w-md text-center">
@@ -163,18 +187,33 @@ export function LessonPlayer({
                   ? 'Awaiting Parent PIN'
                   : rewardSummary.cappedOut
                     ? 'Learning Logged'
-                    : 'Apps Unlocked'}
+                    : `Resuming ${resumeTarget}`}
               </p>
             </div>
           </div>
 
+          {shouldAutoMinimize && (
+            <p className="mt-4 text-xs font-semibold text-emerald-800">
+              Unpinning SomaTime &amp; resuming {resumeTarget} where it was interrupted...
+            </p>
+          )}
+
           <button
             type="button"
-            onClick={onExit}
-            className="mt-6 flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700"
+            onClick={() => {
+              if (shouldAutoMinimize) {
+                onAutoMinimized?.(resumedAppName);
+              }
+              onExit();
+            }}
+            className="mt-5 flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700"
           >
             <Sparkles className="h-4 w-4" />
-            <span>Return to Android Home Screen</span>
+            <span>
+              {shouldAutoMinimize
+                ? `Minimize & Resume ${resumeTarget} Now`
+                : 'Return to SomaTime'}
+            </span>
           </button>
         </div>
       </div>
@@ -187,14 +226,33 @@ export function LessonPlayer({
     <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-7">
       {/* Header & Progress */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <button
-          type="button"
-          onClick={onExit}
-          className="flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Back to Curriculum</span>
-        </button>
+        {isPinnedLock ? (
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-xl bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900">
+              <ShieldCheck className="h-4 w-4 text-amber-700" />
+              <span>Pinned Auto-Assignment</span>
+            </span>
+            {onOpenPinUnlock && (
+              <button
+                type="button"
+                onClick={onOpenPinUnlock}
+                className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <KeyRound className="h-3.5 w-3.5 text-teal-700" />
+                <span>Parent PIN</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onExit}
+            className="flex min-h-[40px] items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>Back to Curriculum</span>
+          </button>
+        )}
         <div className="text-right text-xs text-slate-600">
           <span className="font-semibold text-slate-900">
             Grade {lesson.grade} · {lesson.learningArea}

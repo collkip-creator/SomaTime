@@ -894,6 +894,159 @@ export function generateTeacherCode(): string {
   return `TCH-${digits}`;
 }
 
+export function getCatalogTrackingKey(
+  grade: number,
+  learningArea: LearningArea,
+  strand: string,
+  subStrand: string
+): string {
+  return `cat:${grade}:${learningArea}:${strand}:${subStrand}`;
+}
+
+export interface PickedAssignmentResult {
+  lesson: CBCLesson;
+  isPriority: boolean;
+  trackingKey: string;
+  quizId: string;
+  wrappedCycle: boolean;
+}
+
+export function pickNextUnseenAssignment(params: {
+  child: ChildProfile;
+  pendingAssignments: TeacherAssignment[];
+  displayedKeys: string[];
+  displayedQuizIds: string[];
+}): PickedAssignmentResult {
+  const { child, pendingAssignments, displayedKeys, displayedQuizIds } = params;
+  const learnerGrade = child.grade;
+
+  // 1. Prioritize pending Teacher Assignments for the learner's grade
+  if (pendingAssignments.length > 0) {
+    const lastAssignKey = [...displayedKeys].reverse().find((k) => k.startsWith('assign:'));
+    const unseenAssigns = pendingAssignments.filter(
+      (a) => !displayedKeys.includes(`assign:${a.id}`)
+    );
+    const pool =
+      unseenAssigns.length > 0
+        ? unseenAssigns
+        : pendingAssignments.filter((a) => `assign:${a.id}` !== lastAssignKey).length > 0
+          ? pendingAssignments.filter((a) => `assign:${a.id}` !== lastAssignKey)
+          : pendingAssignments;
+
+    const chosen = pool[Math.floor(Math.random() * pool.length)];
+    const base =
+      CBC_LESSONS.find((l) => l.id === chosen.lessonId) ??
+      CBC_LESSONS.find((l) => l.grade === learnerGrade && l.learningArea === chosen.learningArea) ??
+      CBC_LESSONS.find((l) => l.learningArea === chosen.learningArea) ??
+      CBC_LESSONS[0];
+
+    // Keep base.id so completeLesson marks the TeacherAssignment completed cleanly
+    const contextual: CBCLesson = {
+      ...base,
+      title: chosen.title || `${chosen.subStrand} (${base.title})`,
+      swahiliTitle: chosen.title || base.swahiliTitle,
+      grade: chosen.grade,
+      levelGroup: getLevelGroupForGrade(chosen.grade),
+      learningArea: chosen.learningArea,
+      strand: chosen.strand,
+      subStrand: chosen.subStrand,
+    };
+
+    return {
+      lesson: contextual,
+      isPriority: true,
+      trackingKey: `assign:${chosen.id}`,
+      quizId: base.id,
+      wrappedCycle: false,
+    };
+  }
+
+  // 2. Build grade-appropriate Kenyan CBC catalog pool
+  const gradeCatalog = buildCatalogForGrade(learnerGrade);
+  const mandatoryAvailable =
+    child.mandatorySubjects.length > 0 &&
+    gradeCatalog.some((entry) => child.mandatorySubjects.includes(entry.learningArea));
+  const mandatoryDoneToday =
+    !mandatoryAvailable ||
+    child.activityLogs.some((log) => child.mandatorySubjects.includes(log.learningArea));
+
+  const pool =
+    !mandatoryDoneToday && mandatoryAvailable
+      ? gradeCatalog.filter((entry) => child.mandatorySubjects.includes(entry.learningArea))
+      : gradeCatalog;
+
+  const fallbackPool = pool.length > 0 ? pool : CBC_DIRECTORY_CATALOG;
+  const lastCatKey = [...displayedKeys].reverse().find((k) => k.startsWith('cat:'));
+  const lastQuizId = displayedQuizIds[displayedQuizIds.length - 1];
+
+  const keyOf = (e: CbcCatalogEntry) =>
+    getCatalogTrackingKey(learnerGrade, e.learningArea, e.strand, e.subStrand);
+
+  // Tier 1: unseen sub-strand AND unseen underlying quiz questions
+  const tier1 = fallbackPool.filter(
+    (e) => !displayedKeys.includes(keyOf(e)) && !displayedQuizIds.includes(e.linkedLessonId)
+  );
+  // Tier 2: unseen sub-strand AND not the exact previous quiz questions
+  const tier2 = fallbackPool.filter(
+    (e) => !displayedKeys.includes(keyOf(e)) && e.linkedLessonId !== lastQuizId
+  );
+  // Tier 3: any unseen sub-strand
+  const tier3 = fallbackPool.filter((e) => !displayedKeys.includes(keyOf(e)));
+  // Tier 4: cycle exhausted -> wrap around avoiding immediate back-to-back repeat
+  const tier4NoRepeat = fallbackPool.filter(
+    (e) => keyOf(e) !== lastCatKey && e.linkedLessonId !== lastQuizId
+  );
+  const tier4DiffKey = fallbackPool.filter((e) => keyOf(e) !== lastCatKey);
+
+  const candidates =
+    tier1.length > 0
+      ? tier1
+      : tier2.length > 0
+        ? tier2
+        : tier3.length > 0
+          ? tier3
+          : tier4NoRepeat.length > 0
+            ? tier4NoRepeat
+            : tier4DiffKey.length > 0
+              ? tier4DiffKey
+              : fallbackPool;
+
+  const wrappedCycle = tier1.length === 0 && tier2.length === 0 && tier3.length === 0;
+  const chosenEntry = candidates[Math.floor(Math.random() * candidates.length)];
+
+  const base =
+    CBC_LESSONS.find((l) => l.id === chosenEntry.linkedLessonId) ??
+    CBC_LESSONS.find((l) => l.grade === learnerGrade && l.learningArea === chosenEntry.learningArea) ??
+    CBC_LESSONS.find((l) => l.learningArea === chosenEntry.learningArea) ??
+    CBC_LESSONS[0];
+
+  const contextual: CBCLesson =
+    base.learningArea === chosenEntry.learningArea &&
+    base.strand === chosenEntry.strand &&
+    base.subStrand === chosenEntry.subStrand &&
+    base.grade === learnerGrade
+      ? base
+      : {
+          ...base,
+          title: `${chosenEntry.subStrand} Practice`,
+          swahiliTitle: `${chosenEntry.subStrand} Practice`,
+          grade: learnerGrade,
+          levelGroup: chosenEntry.levelGroup,
+          pathway: chosenEntry.pathway,
+          learningArea: chosenEntry.learningArea,
+          strand: chosenEntry.strand,
+          subStrand: chosenEntry.subStrand,
+        };
+
+  return {
+    lesson: contextual,
+    isPriority: false,
+    trackingKey: keyOf(chosenEntry),
+    quizId: base.id,
+    wrappedCycle,
+  };
+}
+
 export const INITIAL_CHILDREN: ChildProfile[] = [
   {
     id: 'amina',

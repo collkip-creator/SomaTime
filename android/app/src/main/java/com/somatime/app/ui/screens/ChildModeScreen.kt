@@ -36,7 +36,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -45,18 +47,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.somatime.app.data.CbcCurriculumRepository
 import com.somatime.app.data.LessonCompletionResult
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.data.SomaTimeUiState
+import com.somatime.app.guard.UsageAccessHelper
 import com.somatime.app.model.CBCLesson
 import com.somatime.app.model.LearningArea
 import com.somatime.app.model.QuestionType
 import com.somatime.app.ui.theme.SomaAmber
 import com.somatime.app.ui.theme.SomaBlue
 import com.somatime.app.ui.theme.SomaEmerald
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -66,6 +71,8 @@ fun ChildModeScreen(
     onOpenPinUnlock: () -> Unit,
     onOpenExitHandOff: () -> Unit,
     onOpenSetupWizard: () -> Unit,
+    onRecordDisplayedAssignment: (String, String, String, Boolean) -> Unit,
+    onMinimizeAndResumeApp: () -> Unit,
     onCompleteLesson: (String, CBCLesson, Int) -> LessonCompletionResult
 ) {
     val child = uiState.selectedChild
@@ -80,10 +87,19 @@ fun ChildModeScreen(
     val mandatoryDone = !hasMandatoryLessonForGrade ||
         child.activityLogs.any { it.learningArea in child.mandatorySubjects }
 
+    val context = LocalContext.current
     var activeLesson by remember { mutableStateOf<CBCLesson?>(null) }
+    var activeIsPriority by remember { mutableStateOf(false) }
+    var wasLocked by remember(child.id) { mutableStateOf(isLocked) }
     var ruleNotice by remember { mutableStateOf("") }
     var selectedArea by remember { mutableStateOf<LearningArea?>(null) }
     var curriculumSearch by remember { mutableStateOf("") }
+
+    val displayedKeys = uiState.displayedKeysByChild[child.id].orEmpty()
+    val displayedQuizIds = uiState.displayedQuizIdsByChild[child.id].orEmpty()
+    val interruptedAppLabel = remember(uiState.lastInterruptedAppPackage) {
+        UsageAccessHelper.getAppDisplayLabel(context, uiState.lastInterruptedAppPackage)
+    }
 
     val gradeSubjects = remember(learnerGrade) {
         CbcCurriculumRepository.subjectsForGrade(learnerGrade)
@@ -94,7 +110,18 @@ fun ChildModeScreen(
         null
     }
 
-    fun launchLesson(lesson: CBCLesson, isPriority: Boolean) {
+    fun launchLesson(
+        lesson: CBCLesson,
+        isPriority: Boolean,
+        trackingKey: String = CbcCurriculumRepository.catalogTrackingKey(
+            lesson.grade,
+            lesson.learningArea,
+            lesson.strand,
+            lesson.subStrand
+        ),
+        quizId: String = lesson.id,
+        resetCatCycle: Boolean = false
+    ) {
         if (pendingAssignments.isNotEmpty() && !isPriority && pendingAssignments.first().lessonId != lesson.id) {
             ruleNotice = "Complete your Teacher Assignment (Priority): \"${pendingAssignments.first().title}\" first."
             return
@@ -105,16 +132,45 @@ fun ChildModeScreen(
             return
         }
         ruleNotice = ""
+        onRecordDisplayedAssignment(child.id, trackingKey, quizId, resetCatCycle)
+        activeIsPriority = isPriority
         activeLesson = lesson
     }
 
+    // Immediately auto-launch a random unseen assignment whenever the app is pinned or transitions to locked
+    val newlyLocked = isLocked && !wasLocked
+    LaunchedEffect(uiState.isTakeoverLocked, isLocked, child.id, activeLesson) {
+        val shouldAutoLaunch = (uiState.isTakeoverLocked || newlyLocked) && activeLesson == null
+        wasLocked = isLocked
+        if (shouldAutoLaunch) {
+            val pick = CbcCurriculumRepository.pickNextUnseenAssignment(
+                child = child,
+                pendingAssignments = pendingAssignments,
+                displayedKeys = displayedKeys,
+                displayedQuizIds = displayedQuizIds
+            )
+            onRecordDisplayedAssignment(child.id, pick.trackingKey, pick.quizId, pick.wrappedCycle)
+            ruleNotice = ""
+            activeIsPriority = pick.isPriority
+            activeLesson = pick.lesson
+        }
+    }
+
     if (activeLesson != null) {
-        NativeLessonPlayer(
-            lesson = activeLesson!!,
-            exchangeRateMins = child.exchangeRateMins,
-            onComplete = { score -> onCompleteLesson(child.id, activeLesson!!, score) },
-            onExit = { activeLesson = null }
-        )
+        val currentLesson = activeLesson!!
+        key("${currentLesson.id}:${currentLesson.strand}:${currentLesson.subStrand}") {
+            NativeLessonPlayer(
+                lesson = currentLesson,
+                exchangeRateMins = child.exchangeRateMins,
+                isPinnedTakeover = uiState.isTakeoverLocked,
+                isPriority = activeIsPriority,
+                resumedAppLabel = interruptedAppLabel,
+                onOpenPinUnlock = onOpenPinUnlock,
+                onMinimizeAndResumeApp = onMinimizeAndResumeApp,
+                onComplete = { score -> onCompleteLesson(child.id, currentLesson, score) },
+                onExit = { activeLesson = null }
+            )
+        }
         return
     }
 
@@ -231,14 +287,19 @@ fun ChildModeScreen(
                         if (isLocked) {
                             Button(
                                 onClick = {
-                                    val target = if (pendingAssignments.isNotEmpty()) {
-                                        CbcCurriculumRepository.lessons.firstOrNull {
-                                            it.id == pendingAssignments.first().lessonId
-                                        } ?: gradeLessons.firstOrNull() ?: CbcCurriculumRepository.lessons.first()
-                                    } else {
-                                        gradeLessons.firstOrNull() ?: CbcCurriculumRepository.lessons.first()
-                                    }
-                                    launchLesson(target, pendingAssignments.isNotEmpty())
+                                    val pick = CbcCurriculumRepository.pickNextUnseenAssignment(
+                                        child = child,
+                                        pendingAssignments = pendingAssignments,
+                                        displayedKeys = displayedKeys,
+                                        displayedQuizIds = displayedQuizIds
+                                    )
+                                    launchLesson(
+                                        lesson = pick.lesson,
+                                        isPriority = pick.isPriority,
+                                        trackingKey = pick.trackingKey,
+                                        quizId = pick.quizId,
+                                        resetCatCycle = pick.wrappedCycle
+                                    )
                                 },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.buttonColors(containerColor = SomaEmerald)
@@ -308,7 +369,20 @@ fun ChildModeScreen(
                                 val target = CbcCurriculumRepository.lessons.firstOrNull {
                                     it.id == priority.lessonId
                                 } ?: CbcCurriculumRepository.lessons.first()
-                                launchLesson(target, true)
+                                val contextual = target.copy(
+                                    title = priority.title.ifBlank { target.title },
+                                    grade = priority.grade,
+                                    levelGroup = CbcCurriculumRepository.levelGroupForGrade(priority.grade),
+                                    learningArea = priority.learningArea,
+                                    strand = priority.strand,
+                                    subStrand = priority.subStrand
+                                )
+                                launchLesson(
+                                    lesson = contextual,
+                                    isPriority = true,
+                                    trackingKey = "assign:${priority.id}",
+                                    quizId = target.id
+                                )
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A))
                         ) {
@@ -514,7 +588,17 @@ fun ChildModeScreen(
                                 subStrand = entry.subStrand
                             )
                         }
-                        launchLesson(contextual, false)
+                        launchLesson(
+                            lesson = contextual,
+                            isPriority = false,
+                            trackingKey = CbcCurriculumRepository.catalogTrackingKey(
+                                learnerGrade,
+                                entry.learningArea,
+                                entry.strand,
+                                entry.subStrand
+                            ),
+                            quizId = base.id
+                        )
                     }) {
                         Text("Practice")
                     }
@@ -530,6 +614,11 @@ fun ChildModeScreen(
 private fun NativeLessonPlayer(
     lesson: CBCLesson,
     exchangeRateMins: Int,
+    isPinnedTakeover: Boolean,
+    isPriority: Boolean,
+    resumedAppLabel: String?,
+    onOpenPinUnlock: () -> Unit,
+    onMinimizeAndResumeApp: () -> Unit,
     onComplete: (Int) -> LessonCompletionResult,
     onExit: () -> Unit
 ) {
@@ -547,6 +636,17 @@ private fun NativeLessonPlayer(
 
     if (result != null) {
         val outcome = result!!
+        val shouldAutoMinimize = !outcome.queuedForApproval && !outcome.cappedOut
+        val resumeName = resumedAppLabel ?: "Previous App"
+
+        LaunchedEffect(result) {
+            if (shouldAutoMinimize) {
+                delay(1200L)
+                onExit()
+                onMinimizeAndResumeApp()
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -576,13 +676,44 @@ private fun NativeLessonPlayer(
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color(0xFF475569)
             )
+            if (shouldAutoMinimize) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    "Unpinning SomaTime & resuming $resumeName where it was interrupted...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SomaEmerald,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
             Spacer(modifier = Modifier.height(24.dp))
-            Button(
-                onClick = onExit,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = SomaEmerald)
-            ) {
-                Text("Return to Child Mode")
+            if (shouldAutoMinimize) {
+                Button(
+                    onClick = {
+                        onExit()
+                        onMinimizeAndResumeApp()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SomaEmerald)
+                ) {
+                    Text("Minimize & Resume $resumeName")
+                }
+            } else {
+                if (outcome.queuedForApproval) {
+                    Button(
+                        onClick = onOpenPinUnlock,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = SomaBlue)
+                    ) {
+                        Text("Enter Parent PIN to Unlock")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                OutlinedButton(
+                    onClick = onExit,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Return to Child Mode")
+                }
             }
         }
         return
@@ -603,13 +734,35 @@ private fun NativeLessonPlayer(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(onClick = onExit) { Text("Back") }
+                if (isPinnedTakeover) {
+                    OutlinedButton(onClick = onOpenPinUnlock) {
+                        Icon(Icons.Rounded.Key, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Parent PIN")
+                    }
+                } else {
+                    OutlinedButton(onClick = onExit) { Text("Back") }
+                }
                 Text(
                     "Question ${stepIndex + 1} of ${lesson.questions.size} · +${exchangeRateMins}m",
                     style = MaterialTheme.typography.labelMedium,
                     color = Color(0xFF475569)
                 )
             }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                (if (isPriority) "Teacher Priority · " else "") +
+                    "Grade ${lesson.grade} · ${lesson.learningArea.displayName} · ${lesson.strand}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isPriority) Color(0xFFB45309) else SomaEmerald,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                lesson.subStrand,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF475569),
+                fontWeight = FontWeight.SemiBold
+            )
             Spacer(modifier = Modifier.height(8.dp))
             LinearProgressIndicator(progress = { progress.coerceAtLeast(0.1f) }, modifier = Modifier.fillMaxWidth())
         }

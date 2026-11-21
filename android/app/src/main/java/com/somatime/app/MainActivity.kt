@@ -56,6 +56,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.somatime.app.data.SetupWizardTab
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.guard.ScreenTimeGuardService
+import com.somatime.app.guard.UsageAccessHelper
 import com.somatime.app.model.PendingApproval
 import com.somatime.app.model.RoleView
 import com.somatime.app.ui.components.PinDialog
@@ -105,6 +106,9 @@ class MainActivity : ComponentActivity() {
                     onTakeoverLockChanged = { locked ->
                         takeoverLockEnforced = locked
                         applyTakeoverSystemUi(locked)
+                    },
+                    onMinimizeAndResumeApp = {
+                        minimizeAndResumeInterruptedApp(store)
                     }
                 )
             }
@@ -221,12 +225,35 @@ class MainActivity : ComponentActivity() {
             store.setRoleView(RoleView.CHILD)
         }
     }
+
+    private fun minimizeAndResumeInterruptedApp(store: SomaTimeStore) {
+        takeoverLockEnforced = false
+        store.suppressGuardBriefly(2500L)
+        applyTakeoverSystemUi(false)
+
+        val targetPkg = store.state.value.lastInterruptedAppPackage
+        val launchIntent = if (UsageAccessHelper.isTrackableInterruptedApp(this, targetPkg)) {
+            targetPkg?.let { packageManager.getLaunchIntentForPackage(it) }
+        } else {
+            null
+        }
+
+        if (launchIntent != null) {
+            launchIntent.flags =
+                (launchIntent.flags and Intent.FLAG_ACTIVITY_CLEAR_TASK.inv() and Intent.FLAG_ACTIVITY_CLEAR_TOP.inv()) or
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            runCatching { startActivity(launchIntent) }
+        }
+        moveTaskToBack(true)
+    }
 }
 
 @Composable
 private fun SomaTimeRoot(
     store: SomaTimeStore,
-    onTakeoverLockChanged: (Boolean) -> Unit
+    onTakeoverLockChanged: (Boolean) -> Unit,
+    onMinimizeAndResumeApp: () -> Unit
 ) {
     val context = LocalContext.current
     val uiState by store.state.collectAsState()
@@ -416,6 +443,8 @@ private fun SomaTimeRoot(
                         onOpenPinUnlock = { pinIntent = PinIntent.UnlockChild },
                         onOpenExitHandOff = { pinIntent = PinIntent.ExitHandOff(RoleView.PARENT) },
                         onOpenSetupWizard = { store.setShowSetupWizard(true, SetupWizardTab.LEARNER) },
+                        onRecordDisplayedAssignment = store::recordDisplayedAssignment,
+                        onMinimizeAndResumeApp = onMinimizeAndResumeApp,
                         onCompleteLesson = store::completeLesson
                     )
 

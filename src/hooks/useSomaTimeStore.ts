@@ -46,6 +46,8 @@ interface PersistedState {
   children: ChildProfile[];
   assignments: TeacherAssignment[];
   classRoster: ClassStudentRecord[];
+  displayedKeysByChild: Record<string, string[]>;
+  displayedQuizIdsByChild: Record<string, string[]>;
 }
 
 function getDefaultState(): PersistedState {
@@ -64,6 +66,8 @@ function getDefaultState(): PersistedState {
     children: INITIAL_CHILDREN,
     assignments: INITIAL_ASSIGNMENTS,
     classRoster: INITIAL_CLASS_ROSTER,
+    displayedKeysByChild: {},
+    displayedQuizIdsByChild: {},
   };
 }
 
@@ -85,6 +89,8 @@ function loadState(): PersistedState {
       children: parsed.children,
       assignments: parsed.assignments ?? INITIAL_ASSIGNMENTS,
       classRoster: parsed.classRoster ?? INITIAL_CLASS_ROSTER,
+      displayedKeysByChild: parsed.displayedKeysByChild ?? {},
+      displayedQuizIdsByChild: parsed.displayedQuizIdsByChild ?? {},
     };
   } catch {
     return getDefaultState();
@@ -130,6 +136,7 @@ function cloudDocToChildProfile(
     learnedMinutesToday: cloud.learnedMinutesToday,
     isLocked: cloud.isLocked || cloud.availableScreenSeconds <= 0,
     activeAppName: existing?.activeAppName ?? null,
+    lastInterruptedAppName: existing?.lastInterruptedAppName ?? existing?.activeAppName ?? null,
     completedLessonIds: cloud.completedLessonIds || existing?.completedLessonIds || [],
     pendingApprovals: existing?.pendingApprovals ?? [],
     activityLogs: existing?.activityLogs ?? [],
@@ -308,6 +315,9 @@ export function useSomaTimeStore() {
             availableScreenSeconds: nextSeconds,
             usedScreenTodayMins: nextUsed,
             isLocked: nowLocked,
+            lastInterruptedAppName: nowLocked
+              ? child.activeAppName || child.lastInterruptedAppName || 'YouTube'
+              : child.lastInterruptedAppName,
             activeAppName: nowLocked ? null : child.activeAppName,
           };
           if (nowLocked && updated.isPaired) {
@@ -608,6 +618,7 @@ export function useSomaTimeStore() {
           backgroundGuardActive: true,
           isLocked: true,
           availableScreenSeconds: 0,
+          lastInterruptedAppName: c.activeAppName || c.lastInterruptedAppName || null,
           activeAppName: null,
         };
         return updatedTarget;
@@ -638,6 +649,7 @@ export function useSomaTimeStore() {
           ...c,
           availableScreenSeconds: 0,
           isLocked: true,
+          lastInterruptedAppName: c.activeAppName || c.lastInterruptedAppName || 'YouTube',
           activeAppName: null,
         };
         return updatedTarget;
@@ -661,6 +673,7 @@ export function useSomaTimeStore() {
           ...c,
           isLocked: false,
           availableScreenSeconds: c.availableScreenSeconds + grantedMins * 60,
+          activeAppName: c.activeAppName || c.lastInterruptedAppName || null,
         };
         return updatedTarget;
       }),
@@ -676,10 +689,47 @@ export function useSomaTimeStore() {
     setState((prev) => ({
       ...prev,
       children: prev.children.map((c) =>
-        c.id === childId ? { ...c, activeAppName: appName } : c
+        c.id === childId
+          ? {
+              ...c,
+              activeAppName: appName,
+              lastInterruptedAppName: appName ?? c.lastInterruptedAppName ?? null,
+            }
+          : c
       ),
     }));
   }, []);
+
+  const recordDisplayedAssignment = useCallback(
+    (childId: string, trackingKey: string, quizId: string, resetCatCycle = false) => {
+      setState((prev) => {
+        const currentKeys = prev.displayedKeysByChild[childId] ?? [];
+        const baseKeys = resetCatCycle
+          ? currentKeys.filter((k) => !k.startsWith('cat:'))
+          : currentKeys.filter((k) => k !== trackingKey);
+        const nextKeys = [...baseKeys, trackingKey];
+
+        const currentQuizzes = prev.displayedQuizIdsByChild[childId] ?? [];
+        const baseQuizzes = resetCatCycle
+          ? []
+          : currentQuizzes.filter((q) => q !== quizId);
+        const nextQuizzes = [...baseQuizzes, quizId];
+
+        return {
+          ...prev,
+          displayedKeysByChild: {
+            ...prev.displayedKeysByChild,
+            [childId]: nextKeys,
+          },
+          displayedQuizIdsByChild: {
+            ...prev.displayedQuizIdsByChild,
+            [childId]: nextQuizzes,
+          },
+        };
+      });
+    },
+    []
+  );
 
   const completeLesson = useCallback(
     (
@@ -769,6 +819,9 @@ export function useSomaTimeStore() {
               ? c.availableScreenSeconds + earnedMins * 60
               : c.availableScreenSeconds,
             isLocked: unlockedNow ? false : c.isLocked,
+            activeAppName: unlockedNow
+              ? c.lastInterruptedAppName || c.activeAppName || 'YouTube'
+              : c.activeAppName,
             pendingApprovals: newPending,
             activityLogs: [newLog, ...c.activityLogs],
             rubricByArea: {
@@ -834,6 +887,9 @@ export function useSomaTimeStore() {
               ? c.availableScreenSeconds + target.minutesEarned * 60
               : c.availableScreenSeconds,
             isLocked: approved ? false : c.isLocked,
+            activeAppName: approved
+              ? c.lastInterruptedAppName || c.activeAppName || null
+              : c.activeAppName,
             activityLogs: c.activityLogs.map((l) =>
               l.lessonTitle === target.lessonTitle && l.status === 'pending'
                 ? { ...l, status: approved ? 'approved' : 'declined' }
@@ -1050,6 +1106,8 @@ export function useSomaTimeStore() {
     children: state.children,
     assignments: state.assignments,
     classRoster: state.classRoster,
+    displayedKeysByChild: state.displayedKeysByChild,
+    displayedQuizIdsByChild: state.displayedQuizIdsByChild,
     cloudSyncOk,
     cloudSyncMessage,
     retryCloudSyncNow,
@@ -1065,6 +1123,7 @@ export function useSomaTimeStore() {
     simulateTimeExpired,
     unlockWithParentPin,
     selectActiveApp,
+    recordDisplayedAssignment,
     completeLesson,
     resolveApproval,
     registerTeacher,

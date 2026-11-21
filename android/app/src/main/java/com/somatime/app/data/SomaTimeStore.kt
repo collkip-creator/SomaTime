@@ -2,6 +2,7 @@ package com.somatime.app.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.somatime.app.guard.UsageAccessHelper
 import com.somatime.app.model.CBCLesson
 import com.somatime.app.model.CBCRubric
 import com.somatime.app.model.ChildActivityLog
@@ -71,6 +72,9 @@ data class SomaTimeUiState(
     val cloudSyncOk: Boolean = false,
     val cloudSyncMessage: String = "Syncing pairing codes to Cloud...",
     val lastDetectedForegroundApp: String? = null,
+    val lastInterruptedAppPackage: String? = null,
+    val displayedKeysByChild: Map<String, List<String>> = emptyMap(),
+    val displayedQuizIdsByChild: Map<String, List<String>> = emptyMap(),
     val children: List<ChildProfile> = CbcCurriculumRepository.initialChildren(),
     val assignments: List<TeacherAssignment> = CbcCurriculumRepository.initialAssignments(),
     val classRoster: List<ClassStudentRecord> = CbcCurriculumRepository.initialClassRoster()
@@ -87,13 +91,23 @@ data class SomaTimeUiState(
 
 class SomaTimeStore private constructor(context: Context) {
 
+    private val appContext: Context = context.applicationContext
     private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var tickerJob: Job? = null
 
+    @Volatile
+    private var guardSuppressedUntilMs: Long = 0L
+
     private val _state = MutableStateFlow(loadInitialState())
     val state: StateFlow<SomaTimeUiState> = _state.asStateFlow()
+
+    fun suppressGuardBriefly(durationMs: Long = 2500L) {
+        guardSuppressedUntilMs = System.currentTimeMillis() + durationMs
+    }
+
+    fun isGuardSuppressed(): Boolean = System.currentTimeMillis() < guardSuppressedUntilMs
 
     init {
         startCountdownTicker()
@@ -196,6 +210,9 @@ class SomaTimeStore private constructor(context: Context) {
         val registeredTeachers = decodeTeachers(prefs.getString("registered_teachers_json", null))
         val activeTeacherCode = prefs.getString("active_teacher_code", null)
         val activeTeacher = registeredTeachers.firstOrNull { it.teacherCode == activeTeacherCode }
+        val lastInterrupted = prefs.getString("last_interrupted_app_package", null)
+        val displayedKeys = decodeStringListMap(prefs.getString("displayed_keys_json", null))
+        val displayedQuizzes = decodeStringListMap(prefs.getString("displayed_quiz_ids_json", null))
 
         return base.copy(
             roleView = savedRole,
@@ -206,8 +223,42 @@ class SomaTimeStore private constructor(context: Context) {
             parentPin = parentPin,
             teacherAccount = activeTeacher,
             registeredTeachers = registeredTeachers,
+            lastInterruptedAppPackage = lastInterrupted,
+            displayedKeysByChild = displayedKeys,
+            displayedQuizIdsByChild = displayedQuizzes,
             children = allChildren
         )
+    }
+
+    private fun decodeStringListMap(rawJson: String?): Map<String, List<String>> {
+        if (rawJson.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = JSONObject(rawJson)
+            buildMap {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val arr = obj.optJSONArray(k) ?: continue
+                    val list = buildList {
+                        for (i in 0 until arr.length()) {
+                            val v = arr.optString(i)
+                            if (v.isNotEmpty()) add(v)
+                        }
+                    }
+                    put(k, list)
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun encodeStringListMap(map: Map<String, List<String>>): String {
+        val obj = JSONObject()
+        map.forEach { (k, v) ->
+            val arr = JSONArray()
+            v.forEach { arr.put(it) }
+            obj.put(k, arr)
+        }
+        return obj.toString()
     }
 
     private fun decodeTeachers(rawJson: String?): List<TeacherAccount> {
@@ -275,6 +326,9 @@ class SomaTimeStore private constructor(context: Context) {
         editor.putString("parent_pin", s.parentPin)
         editor.putString("active_teacher_code", s.teacherAccount?.teacherCode)
         editor.putString("registered_teachers_json", encodeTeachers(s.registeredTeachers))
+        editor.putString("last_interrupted_app_package", s.lastInterruptedAppPackage)
+        editor.putString("displayed_keys_json", encodeStringListMap(s.displayedKeysByChild))
+        editor.putString("displayed_quiz_ids_json", encodeStringListMap(s.displayedQuizIdsByChild))
         s.children.forEach { c ->
             val prefix = "child_${c.id}_"
             editor.putString("${prefix}name", c.name)
@@ -1015,8 +1069,49 @@ class SomaTimeStore private constructor(context: Context) {
         _state.update { it.copy(guardServiceRunning = running) }
     }
 
+    fun recordDisplayedAssignment(
+        childId: String,
+        trackingKey: String,
+        quizId: String,
+        resetCatCycle: Boolean = false
+    ) {
+        _state.update { current ->
+            val prevKeys = current.displayedKeysByChild[childId].orEmpty()
+            val baseKeys = if (resetCatCycle) {
+                prevKeys.filterNot { it.startsWith("cat:") }
+            } else {
+                prevKeys.filterNot { it == trackingKey }
+            }
+            val nextKeys = baseKeys + trackingKey
+
+            val prevQuizzes = current.displayedQuizIdsByChild[childId].orEmpty()
+            val baseQuizzes = if (resetCatCycle) emptyList() else prevQuizzes.filterNot { it == quizId }
+            val nextQuizzes = baseQuizzes + quizId
+
+            current.copy(
+                displayedKeysByChild = current.displayedKeysByChild + (childId to nextKeys),
+                displayedQuizIdsByChild = current.displayedQuizIdsByChild + (childId to nextQuizzes)
+            ).also(::persistState)
+        }
+    }
+
     fun updateForegroundApp(packageName: String?) {
-        _state.update { it.copy(lastDetectedForegroundApp = packageName) }
+        val trackable = UsageAccessHelper.isTrackableInterruptedApp(appContext, packageName)
+        val launcherPkg = UsageAccessHelper.getDefaultLauncherPackage(appContext)
+        _state.update { current ->
+            val nextInterrupted = when {
+                trackable -> packageName
+                !current.isTakeoverLocked && packageName != null && packageName == launcherPkg -> null
+                else -> current.lastInterruptedAppPackage
+            }
+            val changed = current.lastDetectedForegroundApp != packageName ||
+                current.lastInterruptedAppPackage != nextInterrupted
+            if (!changed) return@update current
+            current.copy(
+                lastDetectedForegroundApp = packageName,
+                lastInterruptedAppPackage = nextInterrupted
+            ).also { if (current.lastInterruptedAppPackage != nextInterrupted) persistState(it) }
+        }
     }
 
     fun resetDemo() {

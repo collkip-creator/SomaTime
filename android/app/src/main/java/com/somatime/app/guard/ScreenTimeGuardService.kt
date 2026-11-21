@@ -70,13 +70,13 @@ class ScreenTimeGuardService : Service() {
                     runCatching { store.syncPairedChildWithCloud() }
                 }
 
-                val uiState = store.state.value
                 val foregroundPkg = UsageAccessHelper.getForegroundPackageName(this@ScreenTimeGuardService)
                 if (foregroundPkg != null) {
                     store.updateForegroundApp(foregroundPkg)
                 }
 
-                val isTakeoverEnforced = uiState.isTakeoverLocked
+                val uiState = store.state.value
+                val isTakeoverEnforced = uiState.isTakeoverLocked && !store.isGuardSuppressed()
 
                 if (!isTakeoverEnforced) {
                     takeoverTriggered = false
@@ -97,13 +97,18 @@ class ScreenTimeGuardService : Service() {
                 val shouldTakeOverNow = !takeoverTriggered || openingOtherApp
                 if (shouldTakeOverNow) {
                     takeoverTriggered = true
+                    val intercepted = if (UsageAccessHelper.isTrackableInterruptedApp(this@ScreenTimeGuardService, foregroundPkg)) {
+                        foregroundPkg
+                    } else {
+                        store.state.value.lastInterruptedAppPackage ?: "screen_timer_expired"
+                    }
                     val lockIntent = Intent(this@ScreenTimeGuardService, MainActivity::class.java).apply {
                         addFlags(
                             Intent.FLAG_ACTIVITY_NEW_TASK or
                                 Intent.FLAG_ACTIVITY_SINGLE_TOP or
                                 Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         )
-                        putExtra(EXTRA_INTERCEPTED_APP, foregroundPkg ?: "screen_timer_expired")
+                        putExtra(EXTRA_INTERCEPTED_APP, intercepted)
                     }
                     runCatching { startActivity(lockIntent) }
                 }
