@@ -104,6 +104,9 @@ fun ChildModeScreen(
     val gradeSubjects = remember(learnerGrade) {
         CbcCurriculumRepository.subjectsForGrade(learnerGrade)
     }
+    val gradeQuestionCount = remember(learnerGrade) {
+        CbcCurriculumRepository.questionCountForGrade(learnerGrade)
+    }
     val effectiveSelectedArea = if (selectedArea == null || selectedArea in gradeSubjects) {
         selectedArea
     } else {
@@ -132,9 +135,10 @@ fun ChildModeScreen(
             return
         }
         ruleNotice = ""
+        val scaledLesson = CbcCurriculumRepository.scaleLessonQuestionsForGrade(lesson, learnerGrade)
         onRecordDisplayedAssignment(child.id, trackingKey, quizId, resetCatCycle)
         activeIsPriority = isPriority
-        activeLesson = lesson
+        activeLesson = scaledLesson
     }
 
     // Immediately auto-launch a random unseen assignment whenever the app is pinned or transitions to locked
@@ -413,15 +417,15 @@ fun ChildModeScreen(
             }
         }
 
-        // Playable 5-Minute Micro-Lessons for Learner's Grade Only
+        // Playable Micro-Lessons for Learner's Grade Only (Question count scales per grade)
         item {
             Text(
-                "Grade $learnerGrade Interactive 5-Minute Activities",
+                "Grade $learnerGrade Interactive Activities ($gradeQuestionCount Questions)",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                "Showing only Grade $learnerGrade (${CbcCurriculumRepository.levelGroupForGrade(learnerGrade)}) content",
+                "Showing only Grade $learnerGrade (${CbcCurriculumRepository.levelGroupForGrade(learnerGrade)}) content · $gradeQuestionCount questions per session (scales from 3 in Grade 1)",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF64748B)
             )

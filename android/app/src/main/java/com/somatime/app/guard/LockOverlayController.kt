@@ -109,7 +109,7 @@ class LockOverlayController(private val context: Context) {
             }
 
             val subtitle = TextView(context).apply {
-                text = "Other apps, settings, and notifications are locked. Complete a 5-minute Kenyan CBC activity or enter Parent PIN to unlock."
+                text = "Other apps, settings, and notifications are locked. Complete a Kenyan CBC activity or enter Parent PIN to unlock."
                 setTextColor(Color.parseColor("#CBD5E1"))
                 textSize = 15f
                 gravity = Gravity.CENTER

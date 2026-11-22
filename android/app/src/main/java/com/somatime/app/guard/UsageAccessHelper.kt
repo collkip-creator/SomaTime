@@ -17,6 +17,7 @@ object UsageAccessHelper {
     val restrictedEntertainmentPackages = setOf(
         "com.google.android.youtube",
         "com.zhiliaoapp.musically",
+        "com.zhiliaoapp.musically.go",
         "com.ss.android.ugc.trill",
         "com.instagram.android",
         "com.kiloo.subwaysurf",
@@ -133,16 +134,35 @@ object UsageAccessHelper {
         if (!hasUsageStatsPermission(context)) return null
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val end = System.currentTimeMillis()
-        val start = end - 10_000L
+        val start = end - 120_000L
         val events = usm.queryEvents(start, end)
         val event = UsageEvents.Event()
         var latestPackage: String? = null
+        var latestTs = 0L
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
+            @Suppress("DEPRECATION")
+            val isForegroundEvent =
+                event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
+                    event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND
+            if (isForegroundEvent && event.timeStamp >= latestTs) {
+                latestTs = event.timeStamp
                 latestPackage = event.packageName
             }
         }
-        return latestPackage
+        if (!latestPackage.isNullOrBlank()) {
+            return latestPackage
+        }
+
+        // Fallback when child stays on the same screen (e.g. watching TikTok feed) longer than event lookback
+        val stats = usm.queryUsageStats(
+            UsageStatsManager.INTERVAL_DAILY,
+            end - 3_600_000L,
+            end
+        )
+        return stats
+            ?.filter { it.lastTimeUsed > end - 1_800_000L }
+            ?.maxByOrNull { it.lastTimeUsed }
+            ?.packageName
     }
 }

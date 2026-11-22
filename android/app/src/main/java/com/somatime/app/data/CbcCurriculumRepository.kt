@@ -631,6 +631,12 @@ object CbcCurriculumRepository {
         return "TCH-$num"
     }
 
+    fun questionCountForGrade(grade: Int): Int =
+        CbcSessionBuilder.questionCountForGrade(grade)
+
+    fun scaleLessonQuestionsForGrade(lesson: CBCLesson, grade: Int): CBCLesson =
+        CbcSessionBuilder.scaleLessonForGrade(lesson, grade, lessons, levelGroupForGrade(grade))
+
     data class PickedAssignmentResult(
         val lesson: CBCLesson,
         val isPriority: Boolean,
@@ -678,7 +684,7 @@ object CbcCurriculumRepository {
             )
 
             return PickedAssignmentResult(
-                lesson = contextual,
+                lesson = scaleLessonQuestionsForGrade(contextual, learnerGrade),
                 isPriority = true,
                 trackingKey = "assign:${chosen.id}",
                 quizId = base.id,
@@ -746,7 +752,7 @@ object CbcCurriculumRepository {
         }
 
         return PickedAssignmentResult(
-            lesson = contextual,
+            lesson = scaleLessonQuestionsForGrade(contextual, learnerGrade),
             isPriority = false,
             trackingKey = keyOf(chosenEntry),
             quizId = base.id,

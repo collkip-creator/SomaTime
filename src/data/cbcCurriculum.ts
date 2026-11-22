@@ -18,11 +18,16 @@ import {
   getStrandsForSubject,
   getSubjectsForGrade,
 } from './cbcFullCatalog';
+import {
+  buildGradeScaledLesson,
+  getQuestionCountForGrade,
+} from './cbcQuestionBank';
 
 export {
   CBC_CURRICULUM_TREE,
   buildCatalogForGrade,
   getCurriculumStats,
+  getQuestionCountForGrade,
   getStrandsForSubject,
   getSubjectsForGrade,
 };
@@ -911,6 +916,10 @@ export interface PickedAssignmentResult {
   wrappedCycle: boolean;
 }
 
+export function scaleLessonQuestionsForGrade(lesson: CBCLesson, grade: number): CBCLesson {
+  return buildGradeScaledLesson(lesson, grade, CBC_LESSONS, getLevelGroupForGrade(grade));
+}
+
 export function pickNextUnseenAssignment(params: {
   child: ChildProfile;
   pendingAssignments: TeacherAssignment[];
@@ -953,7 +962,7 @@ export function pickNextUnseenAssignment(params: {
     };
 
     return {
-      lesson: contextual,
+      lesson: scaleLessonQuestionsForGrade(contextual, learnerGrade),
       isPriority: true,
       trackingKey: `assign:${chosen.id}`,
       quizId: base.id,
@@ -1039,7 +1048,7 @@ export function pickNextUnseenAssignment(params: {
         };
 
   return {
-    lesson: contextual,
+    lesson: scaleLessonQuestionsForGrade(contextual, learnerGrade),
     isPriority: false,
     trackingKey: keyOf(chosenEntry),
     quizId: base.id,

@@ -2,6 +2,7 @@ package com.somatime.app.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import com.somatime.app.guard.UsageAccessHelper
 import com.somatime.app.model.CBCLesson
 import com.somatime.app.model.CBCRubric
@@ -100,8 +101,17 @@ class SomaTimeStore private constructor(context: Context) {
     @Volatile
     private var guardSuppressedUntilMs: Long = 0L
 
+    @Volatile
+    private var mainActivityForeground: Boolean = false
+
     private val _state = MutableStateFlow(loadInitialState())
     val state: StateFlow<SomaTimeUiState> = _state.asStateFlow()
+
+    fun setMainActivityForeground(foreground: Boolean) {
+        mainActivityForeground = foreground
+    }
+
+    fun isMainActivityForeground(): Boolean = mainActivityForeground
 
     fun suppressGuardBriefly(durationMs: Long = 2500L) {
         guardSuppressedUntilMs = System.currentTimeMillis() + durationMs
@@ -350,8 +360,14 @@ class SomaTimeStore private constructor(context: Context) {
     private fun startCountdownTicker() {
         tickerJob?.cancel()
         tickerJob = scope.launch {
+            var lastWallMs = SystemClock.elapsedRealtime()
             while (isActive) {
-                delay(1000L)
+                delay(500L)
+                val nowMs = SystemClock.elapsedRealtime()
+                val elapsedSecs = ((nowMs - lastWallMs) / 1000L).toInt()
+                if (elapsedSecs <= 0) continue
+                lastWallMs += elapsedSecs * 1000L
+
                 var newlyLockedChild: ChildProfile? = null
                 _state.update { current ->
                     val anyTicking = current.children.any { !it.isLocked && it.availableScreenSeconds > 0 }
@@ -360,13 +376,12 @@ class SomaTimeStore private constructor(context: Context) {
                         if (child.isLocked || child.availableScreenSeconds <= 0) {
                             child
                         } else {
-                            val nextSecs = (child.availableScreenSeconds - 1).coerceAtLeast(0)
-                            val minuteTicked = nextSecs % 60 == 59 && child.availableScreenSeconds > 0
-                            val nextUsed = if (minuteTicked) {
-                                (child.usedScreenTodayMins + 1).coerceAtMost(child.dailyCapMins)
-                            } else {
-                                child.usedScreenTodayMins
-                            }
+                            val beforeSecs = child.availableScreenSeconds
+                            val nextSecs = (beforeSecs - elapsedSecs).coerceAtLeast(0)
+                            val beforeMinsElapsed = (beforeSecs + 59) / 60
+                            val afterMinsElapsed = (nextSecs + 59) / 60
+                            val minsConsumed = (beforeMinsElapsed - afterMinsElapsed).coerceAtLeast(0)
+                            val nextUsed = (child.usedScreenTodayMins + minsConsumed).coerceAtMost(child.dailyCapMins)
                             val nextChild = child.copy(
                                 availableScreenSeconds = nextSecs,
                                 usedScreenTodayMins = nextUsed,
@@ -634,12 +649,14 @@ class SomaTimeStore private constructor(context: Context) {
             val cloudRes = FirestoreSyncClient.fetchPairingSession(child.pairingCode)
             val cloud = cloudRes.data
             if (cloudRes.ok && cloud != null) {
-                val remoteUnlockedOrChanged =
-                    (!cloud.isLocked && child.isLocked && cloud.availableScreenSeconds > child.availableScreenSeconds) ||
-                        cloud.dailyCapMins != child.dailyCapMins ||
+                val remoteUnlocked =
+                    !cloud.isLocked && child.isLocked && cloud.availableScreenSeconds > child.availableScreenSeconds
+                val settingsChanged =
+                    cloud.dailyCapMins != child.dailyCapMins ||
                         cloud.exchangeRateMins != child.exchangeRateMins ||
+                        cloud.requireParentApproval != child.requireParentApproval ||
                         cloud.parentPin != current.parentPin
-                if (remoteUnlockedOrChanged) {
+                if (remoteUnlocked || settingsChanged) {
                     _state.update { s ->
                         val nextChildren = s.children.map { c ->
                             if (c.id != child.id) {
@@ -649,8 +666,12 @@ class SomaTimeStore private constructor(context: Context) {
                                     dailyCapMins = cloud.dailyCapMins,
                                     exchangeRateMins = cloud.exchangeRateMins,
                                     requireParentApproval = cloud.requireParentApproval,
-                                    availableScreenSeconds = cloud.availableScreenSeconds,
-                                    isLocked = cloud.isLocked || cloud.availableScreenSeconds <= 0
+                                    availableScreenSeconds = if (remoteUnlocked) cloud.availableScreenSeconds else c.availableScreenSeconds,
+                                    isLocked = if (remoteUnlocked) {
+                                        cloud.isLocked || cloud.availableScreenSeconds <= 0
+                                    } else {
+                                        c.isLocked
+                                    }
                                 )
                             }
                         }
@@ -813,7 +834,7 @@ class SomaTimeStore private constructor(context: Context) {
                     c
                 }
             }
-            current.copy(handOffActive = false, children = next).also(::persistState)
+            current.copy(children = next).also(::persistState)
         }
         updatedTarget?.let { target ->
             scope.launch {

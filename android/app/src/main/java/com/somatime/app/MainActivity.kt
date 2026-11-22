@@ -117,17 +117,37 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleIncomingIntent(intent, SomaTimeStore.getInstance(this))
     }
 
     override fun onResume() {
         super.onResume()
         isActivityResumed = true
+        val store = SomaTimeStore.getInstance(this)
+        store.setMainActivityForeground(true)
+        val uiState = store.state.value
+        takeoverLockEnforced = uiState.isTakeoverLocked
+        if (uiState.roleView == RoleView.CHILD &&
+            (uiState.selectedChild.isPaired || uiState.handOffActive) &&
+            !uiState.guardServiceRunning
+        ) {
+            runCatching { ScreenTimeGuardService.start(this) }
+        }
         applyTakeoverSystemUi(takeoverLockEnforced)
     }
 
     override fun onPause() {
         isActivityResumed = false
+        val store = SomaTimeStore.getInstance(this)
+        store.setMainActivityForeground(false)
+        val uiState = store.state.value
+        if (uiState.roleView == RoleView.CHILD &&
+            (uiState.selectedChild.isPaired || uiState.handOffActive) &&
+            !uiState.guardServiceRunning
+        ) {
+            runCatching { ScreenTimeGuardService.start(this) }
+        }
         super.onPause()
     }
 

@@ -23,9 +23,11 @@ import {
   CBC_LESSONS,
   getCatalogTrackingKey,
   getLevelGroupForGrade,
+  getQuestionCountForGrade,
   getSeniorPathwayHint,
   getSubjectsForGrade,
   pickNextUnseenAssignment,
+  scaleLessonQuestionsForGrade,
 } from '../data/cbcCurriculum';
 import { formatTimeClock } from '../hooks/useSomaTimeStore';
 import type {
@@ -105,6 +107,7 @@ export function ChildMode({
   const wasLockedRef = useRef<boolean>(false);
 
   const learnerGrade = child.grade;
+  const gradeQuestionCount = getQuestionCountForGrade(learnerGrade);
   const isPhoneLocked = child.isLocked || child.availableScreenSeconds <= 0;
 
   const gradeSubjects = useMemo(() => getSubjectsForGrade(learnerGrade), [learnerGrade]);
@@ -216,13 +219,15 @@ export function ChildMode({
           false
         );
       }
+      const scaledLesson = scaleLessonQuestionsForGrade(lesson, learnerGrade);
       setActiveIsPriority(isPriority);
-      setActiveLesson(lesson);
+      setActiveLesson(scaledLesson);
     },
     [
       child.id,
       child.mandatorySubjects,
       hasPriorityPending,
+      learnerGrade,
       mandatoryDoneToday,
       onRecordDisplayedAssignment,
       priorityAssignments,
@@ -758,14 +763,15 @@ export function ChildMode({
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <h3 className="font-display text-lg font-bold text-slate-900">
-                      Grade {learnerGrade} Interactive 5-Minute Activities
+                      Grade {learnerGrade} Interactive Activities ({gradeQuestionCount} Questions)
                     </h3>
                     <p className="text-xs text-slate-600">
-                      Showing only Grade {learnerGrade} Kenyan CBC quizzes with guided study hints
+                      Showing only Grade {learnerGrade} Kenyan CBC quizzes · {gradeQuestionCount}{' '}
+                      questions per session (scales from 3 in Grade 1)
                     </p>
                   </div>
                   <span className="font-mono text-xs font-bold text-emerald-700 tabular-nums">
-                    +{child.exchangeRateMins}m / activity
+                    +{child.exchangeRateMins}m / session
                   </span>
                 </div>
 
