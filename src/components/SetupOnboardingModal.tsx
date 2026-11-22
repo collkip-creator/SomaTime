@@ -55,6 +55,7 @@ interface SetupOnboardingModalProps {
     subjects: LearningArea[];
     grade: number;
     classStream: string;
+    preserveRoleView?: boolean;
   }) => Promise<TeacherAccount>;
   onLoginTeacher: (
     teacherCode: string,
@@ -91,10 +92,15 @@ export function SetupOnboardingModal({
   const [showParentPin, setShowParentPin] = useState(false);
   const [childName, setChildName] = useState('');
   const [childGrade, setChildGrade] = useState(6);
-  const [childSchool, setChildSchool] = useState('Nairobi Primary School');
+  const [childSchool, setChildSchool] = useState('');
   const [dailyCapMins, setDailyCapMins] = useState(90);
   const [initialWatchMins, setInitialWatchMins] = useState(1);
+  const [alsoTeacher, setAlsoTeacher] = useState(false);
+  const [parentTeacherSchool, setParentTeacherSchool] = useState('');
+  const [parentTeacherGrade, setParentTeacherGrade] = useState(6);
+  const [parentTeacherSubjects, setParentTeacherSubjects] = useState<LearningArea[]>(['Mathematics']);
   const [createdChild, setCreatedChild] = useState<ChildProfile | null>(null);
+  const [createdLinkedTeacher, setCreatedLinkedTeacher] = useState<TeacherAccount | null>(null);
   const [copied, setCopied] = useState(false);
   const [isSavingParent, setIsSavingParent] = useState(false);
   const [parentError, setParentError] = useState('');
@@ -107,7 +113,7 @@ export function SetupOnboardingModal({
   // Teacher registration & login state
   const [teacherMode, setTeacherMode] = useState<'register' | 'login'>('register');
   const [teacherName, setTeacherName] = useState('');
-  const [teacherSchool, setTeacherSchool] = useState('Nairobi Primary School');
+  const [teacherSchool, setTeacherSchool] = useState('');
   const [teacherTscNo, setTeacherTscNo] = useState('');
   const [teacherPin, setTeacherPin] = useState('');
   const [teacherGrade, setTeacherGrade] = useState(6);
@@ -152,6 +158,23 @@ export function SetupOnboardingModal({
         dailyCapMins,
         initialWatchMins,
       });
+      if (alsoTeacher) {
+        const tSchool = parentTeacherSchool.trim() || childSchool.trim() || 'Nairobi Primary School';
+        const tGrade = parentTeacherGrade || childGrade;
+        const linked = await onRegisterTeacher({
+          fullName: parentName.trim() || 'Teacher',
+          school: tSchool,
+          tscNumber: '',
+          pin: parentPin,
+          subjects: parentTeacherSubjects,
+          grade: tGrade,
+          classStream: `Grade ${tGrade} East - ${tSchool}`,
+          preserveRoleView: true,
+        });
+        setCreatedLinkedTeacher(linked);
+      } else {
+        setCreatedLinkedTeacher(null);
+      }
       setCreatedChild(child);
     } catch (err) {
       setParentError(
@@ -162,6 +185,15 @@ export function SetupOnboardingModal({
     } finally {
       setIsSavingParent(false);
     }
+  };
+
+  const toggleParentTeacherSubject = (area: LearningArea) => {
+    setParentTeacherSubjects((prev) => {
+      if (prev.includes(area)) {
+        return prev.length > 1 ? prev.filter((a) => a !== area) : prev;
+      }
+      return prev.length < 8 ? [...prev, area] : prev;
+    });
   };
 
   const handleCopyCode = (code: string) => {
@@ -496,6 +528,99 @@ export function SetupOnboardingModal({
               </div>
             </div>
 
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={alsoTeacher}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setAlsoTeacher(checked);
+                    if (checked) {
+                      if (!parentTeacherSchool.trim() && childSchool.trim()) {
+                        setParentTeacherSchool(childSchool);
+                      }
+                      setParentTeacherGrade(childGrade);
+                    }
+                  }}
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                />
+                <div>
+                  <span className="block text-xs font-bold text-slate-900">
+                    I am also a Teacher at a school (3-in-1 shared phone)
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-slate-600">
+                    Also activates Teacher Portal on this same phone using your Parent Name &amp;
+                    4-digit PIN — no second registration needed.
+                  </span>
+                </div>
+              </label>
+
+              {alsoTeacher && (
+                <div className="mt-4 space-y-3 border-t border-slate-200 pt-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700">
+                        School Where You Teach
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={childSchool || 'e.g. Nairobi Primary School'}
+                        value={parentTeacherSchool}
+                        onChange={(e) => setParentTeacherSchool(e.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Primary Grade Taught
+                      </label>
+                      <select
+                        value={parentTeacherGrade}
+                        onChange={(e) => setParentTeacherGrade(Number(e.target.value))}
+                        className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                      >
+                        {Array.from({ length: 12 }, (_, idx) => idx + 1).map((g) => (
+                          <option key={g} value={g}>
+                            Grade {g} ({getLevelGroupForGrade(g)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        CBC Subject Area(s) You Teach
+                      </label>
+                      <span className="text-[11px] text-slate-500">
+                        {parentTeacherSubjects.length}/8 selected
+                      </span>
+                    </div>
+                    <div className="mt-1.5 flex max-h-28 flex-wrap gap-1.5 overflow-y-auto pr-1">
+                      {ALL_LEARNING_AREAS.map((area) => {
+                        const active = parentTeacherSubjects.includes(area);
+                        return (
+                          <button
+                            key={area}
+                            type="button"
+                            onClick={() => toggleParentTeacherSubject(area)}
+                            className={`rounded-xl border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                              active
+                                ? 'border-teal-700 bg-teal-700 text-white'
+                                : 'border-slate-200 bg-white text-slate-700 hover:border-teal-500'
+                            }`}
+                          >
+                            {area}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {parentError && (
               <p className="text-xs font-semibold text-rose-600" role="alert">
                 {parentError}
@@ -519,7 +644,9 @@ export function SetupOnboardingModal({
                 <span>
                   {isSavingParent
                     ? 'Saving & Syncing Code...'
-                    : 'Complete Registration & Generate Code'}
+                    : alsoTeacher
+                      ? 'Save Parent + Teacher & Child'
+                      : 'Complete Registration & Generate Code'}
                 </span>
               </button>
             </div>
@@ -537,6 +664,19 @@ export function SetupOnboardingModal({
               <h3 className="mt-1 font-display text-lg font-extrabold text-slate-900">
                 {createdChild.name} (Grade {createdChild.grade}) Added
               </h3>
+
+              {createdLinkedTeacher && (
+                <div className="mt-3 rounded-2xl border border-teal-200 bg-white p-3.5 text-left">
+                  <p className="text-xs font-bold text-teal-900">
+                    3-in-1 Teacher Account Also Active: {createdLinkedTeacher.teacherCode}
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-600">
+                    Linked to {createdLinkedTeacher.school} · Grade {createdLinkedTeacher.grade} ·
+                    Uses your same 4-digit PIN. Switch freely between Parent, Teacher &amp; Child
+                    Hand-Off on this phone.
+                  </p>
+                </div>
+              )}
 
               {createdChild.licenseActive ? (
                 <div className="mt-3 flex items-center justify-center gap-2">

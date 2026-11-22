@@ -341,17 +341,19 @@ export function ChildMode({
               </span>
             </div>
             <p className="text-xs text-slate-600">
-              {child.isPaired
-                ? `Paired (${child.pairingCode}) · Background watch-minute guard active · Parent PIN required to interrupt`
-                : handOffActive
-                  ? 'Hand-Off Mode active on Parent Phone · Parent PIN required to exit'
-                  : `${child.school} · Not paired yet (Code: ${child.pairingCode})`}
+              {handOffActive
+                ? 'Shared-Phone Child Lock active · Enter Parent PIN to return to Parent or Teacher mode'
+                : child.isPaired && child.deviceMode === 'own_phone'
+                  ? `Paired (${child.pairingCode}) · Background watch-minute guard active · Parent PIN required to interrupt`
+                  : child.deviceMode === 'hand_off'
+                    ? `${child.school} · Shared Phone Ready (Unrestricted until Hand-Off Lock activated)`
+                    : `${child.school} · Not paired yet (Code: ${child.pairingCode})`}
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {!child.isPaired && (
+          {!handOffActive && !child.isPaired && child.deviceMode !== 'hand_off' && (
             <button
               type="button"
               onClick={onOpenPairSetup}
@@ -360,31 +362,33 @@ export function ChildMode({
               <span>Register as Learner (Enter Code)</span>
             </button>
           )}
-          {!handOffActive && !child.isPaired && childrenList.length > 1 && (
-            <select
-              aria-label="Switch active child preview"
-              value={child.id}
-              onChange={(e) => {
-                setActiveLesson(null);
-                onSelectChild(e.target.value);
-              }}
-              className="min-h-[42px] rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-600 focus:outline-none"
-            >
-              {childrenList.map((c) => (
-                <option key={c.id} value={c.id}>
-                  Preview: {c.name} (G{c.grade})
-                </option>
-              ))}
-            </select>
-          )}
-          {(handOffActive || child.isPaired) && (
+          {!handOffActive &&
+            !(child.isPaired && child.deviceMode === 'own_phone') &&
+            childrenList.length > 1 && (
+              <select
+                aria-label="Switch active child preview"
+                value={child.id}
+                onChange={(e) => {
+                  setActiveLesson(null);
+                  onSelectChild(e.target.value);
+                }}
+                className="min-h-[42px] rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-600 focus:outline-none"
+              >
+                {childrenList.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    Preview: {c.name} (G{c.grade})
+                  </option>
+                ))}
+              </select>
+            )}
+          {(handOffActive || (child.isPaired && child.deviceMode === 'own_phone')) && (
             <button
               type="button"
               onClick={onOpenExitHandOff}
               className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50"
             >
               <KeyRound className="h-3.5 w-3.5 text-teal-700" />
-              <span>Parent Exit (PIN)</span>
+              <span>Parent / Teacher Exit (PIN)</span>
             </button>
           )}
         </div>
@@ -692,6 +696,11 @@ export function ChildMode({
               isPinnedLock={isPhoneLocked}
               resumedAppName={child.lastInterruptedAppName || child.activeAppName || 'YouTube'}
               onOpenPinUnlock={onOpenPinUnlock}
+              onOpenExitHandOff={
+                handOffActive || (child.isPaired && child.deviceMode === 'own_phone')
+                  ? onOpenExitHandOff
+                  : undefined
+              }
               onAutoMinimized={(appName) => {
                 setResumedBanner(
                   `SomaTime minimized · ${appName || 'YouTube'} resumed where it was interrupted (+${child.exchangeRateMins} mins unlocked).`

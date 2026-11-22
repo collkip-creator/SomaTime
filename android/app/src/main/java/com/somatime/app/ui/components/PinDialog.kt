@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.somatime.app.data.CbcCurriculumRepository
+import com.somatime.app.model.RoleView
 import com.somatime.app.ui.theme.SomaTeal
 
 @Composable
@@ -43,6 +45,8 @@ fun PinDialog(
     subtitle: String,
     expectedPin: String = CbcCurriculumRepository.PARENT_PIN,
     confirmLabel: String = "Verify PIN",
+    exitTargetRole: RoleView = RoleView.PARENT,
+    onChangeExitTargetRole: ((RoleView) -> Unit)? = null,
     onSuccess: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -84,6 +88,33 @@ fun PinDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                if (onChangeExitTargetRole != null) {
+                    Text(
+                        text = "Return after PIN check:",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF475569)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = exitTargetRole == RoleView.PARENT,
+                            onClick = { onChangeExitTargetRole(RoleView.PARENT) },
+                            label = { Text("Parent") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = exitTargetRole == RoleView.TEACHER,
+                            onClick = { onChangeExitTargetRole(RoleView.TEACHER) },
+                            label = { Text("Teacher") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     repeat(4) { idx ->
                         val filled = idx < pin.length

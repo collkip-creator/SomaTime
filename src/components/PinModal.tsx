@@ -8,6 +8,8 @@ interface PinModalProps {
   subtitle: string;
   expectedPin?: string;
   confirmLabel?: string;
+  exitTargetRole?: 'parent' | 'teacher';
+  onChangeExitTargetRole?: (role: 'parent' | 'teacher') => void;
   onSuccess: () => void;
   onCancel: () => void;
 }
@@ -18,6 +20,8 @@ export function PinModal({
   subtitle,
   expectedPin = PARENT_PIN,
   confirmLabel = 'Verify PIN',
+  exitTargetRole = 'parent',
+  onChangeExitTargetRole,
   onSuccess,
   onCancel,
 }: PinModalProps) {
@@ -92,6 +96,38 @@ export function PinModal({
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {onChangeExitTargetRole && (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-2.5">
+            <p className="mb-2 text-[11px] font-bold text-slate-600">
+              Return after PIN check:
+            </p>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => onChangeExitTargetRole('parent')}
+                className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-xs font-bold transition-colors ${
+                  exitTargetRole === 'parent'
+                    ? 'bg-teal-700 text-white'
+                    : 'bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Parent Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeExitTargetRole('teacher')}
+                className={`min-h-[36px] rounded-xl px-2.5 py-1.5 text-xs font-bold transition-colors ${
+                  exitTargetRole === 'teacher'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-white text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                Teacher Portal
+              </button>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleManualSubmit} className="mt-5">
           <div className="flex justify-center gap-3">

@@ -79,34 +79,47 @@ enum class SetupWizardTab {
 
 data class SomaTimeUiState(
     val roleView: RoleView = RoleView.PARENT,
-    val selectedChildId: String = "amina",
+    val selectedChildId: String = "",
     val handOffActive: Boolean = false,
-    val parentName: String = "Grace Wanjiku",
-    val parentContact: String = "0712 345 678",
-    val parentPin: String = CbcCurriculumRepository.PARENT_PIN,
+    val demoSeeded: Boolean = false,
+    val parentName: String = "",
+    val parentContact: String = "",
+    val parentPin: String = "",
     val teacherAccount: TeacherAccount? = null,
     val registeredTeachers: List<TeacherAccount> = emptyList(),
     val showSetupWizard: Boolean = false,
     val setupInitialTab: SetupWizardTab = SetupWizardTab.CHOICE,
     val guardServiceRunning: Boolean = false,
-    val cloudSyncOk: Boolean = false,
-    val cloudSyncMessage: String = "Syncing pairing codes to Cloud...",
+    val cloudSyncOk: Boolean = true,
+    val cloudSyncMessage: String = "Fresh start ready · Register to sync",
     val lastDetectedForegroundApp: String? = null,
     val lastInterruptedAppPackage: String? = null,
     val displayedKeysByChild: Map<String, List<String>> = emptyMap(),
     val displayedQuizIdsByChild: Map<String, List<String>> = emptyMap(),
-    val children: List<ChildProfile> = CbcCurriculumRepository.initialChildren(),
-    val assignments: List<TeacherAssignment> = CbcCurriculumRepository.initialAssignments(),
-    val classRoster: List<ClassStudentRecord> = CbcCurriculumRepository.initialClassRoster()
+    val children: List<ChildProfile> = emptyList(),
+    val assignments: List<TeacherAssignment> = emptyList(),
+    val classRoster: List<ClassStudentRecord> = emptyList()
 ) {
-    val selectedChild: ChildProfile
-        get() = children.firstOrNull { it.id == selectedChildId } ?: children.first()
+    val selectedChild: ChildProfile?
+        get() = children.firstOrNull { it.id == selectedChildId } ?: children.firstOrNull()
+
+    val isParentRegistered: Boolean
+        get() = parentName.isNotBlank() && parentPin.length == 4
+
+    val isChildLockEnforced: Boolean
+        get() {
+            val child = selectedChild ?: return false
+            return handOffActive || (child.isPaired && child.deviceMode == DeviceMode.OWN_PHONE)
+        }
 
     val isTakeoverLocked: Boolean
-        get() = roleView == RoleView.CHILD &&
-            !showSetupWizard &&
-            (selectedChild.isLocked || selectedChild.availableScreenSeconds <= 0) &&
-            (handOffActive || selectedChild.isPaired)
+        get() {
+            val child = selectedChild ?: return false
+            return roleView == RoleView.CHILD &&
+                !showSetupWizard &&
+                isChildLockEnforced &&
+                (child.isLocked || child.availableScreenSeconds <= 0)
+        }
 }
 
 class SomaTimeStore private constructor(context: Context) {
@@ -146,11 +159,21 @@ class SomaTimeStore private constructor(context: Context) {
     private fun publishExistingChildrenIfParent() {
         val current = _state.value
         if (current.roleView != RoleView.PARENT) return
+        if (current.children.isEmpty()) {
+            _state.update {
+                it.copy(
+                    cloudSyncOk = true,
+                    cloudSyncMessage = "Fresh start ready · Register parent & child to sync to Cloud"
+                )
+            }
+            return
+        }
+        val safePin = current.parentPin.ifEmpty { CbcCurriculumRepository.PARENT_PIN }
         scope.launch {
             var allOk = true
             var lastErr = ""
             current.children.forEach { child ->
-                val res = FirestoreSyncClient.publishPairingSession(child, current.parentPin)
+                val res = FirestoreSyncClient.publishPairingSession(child, safePin)
                 if (!res.ok) {
                     allOk = false
                     lastErr = res.errorMessage
@@ -160,7 +183,7 @@ class SomaTimeStore private constructor(context: Context) {
                 it.copy(
                     cloudSyncOk = allOk,
                     cloudSyncMessage = if (allOk) {
-                        "Synced to Cloud ✓ · Ready for daughter's phone"
+                        "Synced to Cloud ✓ · Ready for learner phone"
                     } else {
                         lastErr.ifEmpty { "Cloud sync pending — check internet and tap Retry Sync" }
                     }
@@ -170,7 +193,27 @@ class SomaTimeStore private constructor(context: Context) {
     }
 
     private fun loadInitialState(): SomaTimeUiState {
-        val base = SomaTimeUiState()
+        // Clear legacy v2 prefs once so all old test accounts/data are wiped on upgrade
+        runCatching {
+            appContext.getSharedPreferences(LEGACY_PREFS_V2, Context.MODE_PRIVATE).edit().clear().apply()
+        }
+
+        val demoSeeded = prefs.getBoolean("demo_seeded", false)
+        val baseChildren = if (demoSeeded) CbcCurriculumRepository.initialChildren() else emptyList()
+        val baseAssignments = if (demoSeeded) CbcCurriculumRepository.initialAssignments() else emptyList()
+        val baseRoster = if (demoSeeded) CbcCurriculumRepository.initialClassRoster() else emptyList()
+
+        val base = SomaTimeUiState(
+            demoSeeded = demoSeeded,
+            selectedChildId = baseChildren.firstOrNull()?.id ?: "",
+            parentName = if (demoSeeded) "Grace Wanjiku" else "",
+            parentContact = if (demoSeeded) "0712 345 678" else "",
+            parentPin = if (demoSeeded) CbcCurriculumRepository.PARENT_PIN else "",
+            children = baseChildren,
+            assignments = baseAssignments,
+            classRoster = baseRoster
+        )
+
         val savedChildId = prefs.getString("selected_child_id", null) ?: base.selectedChildId
         val savedRole = prefs.getString("role_view", null)?.let {
             runCatching { RoleView.valueOf(it) }.getOrNull()
@@ -181,9 +224,9 @@ class SomaTimeStore private constructor(context: Context) {
         val parentPin = prefs.getString("parent_pin", base.parentPin) ?: base.parentPin
 
         val customIds = prefs.getStringSet("custom_child_ids", emptySet()) ?: emptySet()
-        val baseIds = base.children.map { it.id }.toSet()
+        val baseIds = baseChildren.map { it.id }.toSet()
 
-        val restoredBase = base.children.map { child ->
+        val restoredBase = baseChildren.map { child ->
             val prefix = "child_${child.id}_"
             if (!prefs.contains("${prefix}secs")) return@map child
             child.copy(
@@ -252,11 +295,11 @@ class SomaTimeStore private constructor(context: Context) {
         val displayedQuizzes = decodeStringListMap(prefs.getString("displayed_quiz_ids_json", null))
         val savedAssignments = decodeAssignments(prefs.getString("custom_assignments_json", null))
         val savedIds = savedAssignments.map { it.id }.toSet()
-        val mergedAssignments = savedAssignments + base.assignments.filterNot { it.id in savedIds }
+        val mergedAssignments = savedAssignments + baseAssignments.filterNot { it.id in savedIds }
 
         return base.copy(
             roleView = savedRole,
-            selectedChildId = savedChildId,
+            selectedChildId = savedChildId.ifEmpty { allChildren.firstOrNull()?.id ?: "" },
             handOffActive = handOff,
             parentName = parentName,
             parentContact = parentContact,
@@ -356,8 +399,9 @@ class SomaTimeStore private constructor(context: Context) {
 
     private fun persistState(s: SomaTimeUiState) {
         val editor = prefs.edit()
-        val defaultIds = setOf("amina", "brian")
+        val defaultIds = if (s.demoSeeded) setOf("amina", "brian") else emptySet()
         val customIds = s.children.map { it.id }.filter { it !in defaultIds }.toSet()
+        editor.putBoolean("demo_seeded", s.demoSeeded)
         editor.putStringSet("custom_child_ids", customIds)
         editor.putString("selected_child_id", s.selectedChildId)
         editor.putString("role_view", s.roleView.name)
@@ -461,10 +505,11 @@ class SomaTimeStore private constructor(context: Context) {
 
     fun retryCloudSyncNow() {
         val current = _state.value
-        val child = current.selectedChild
+        val child = current.selectedChild ?: return
+        val safePin = current.parentPin.ifEmpty { CbcCurriculumRepository.PARENT_PIN }
         _state.update { it.copy(cloudSyncMessage = "Syncing ${child.pairingCode} to Cloud...") }
         scope.launch {
-            val res = FirestoreSyncClient.publishPairingSession(child, current.parentPin)
+            val res = FirestoreSyncClient.publishPairingSession(child, safePin)
             _state.update {
                 it.copy(
                     cloudSyncOk = res.ok,
@@ -837,7 +882,7 @@ class SomaTimeStore private constructor(context: Context) {
 
     suspend fun syncPairedChildWithCloud() {
         val current = _state.value
-        val child = current.selectedChild
+        val child = current.selectedChild ?: return
         if (!FirestoreSyncClient.isValidCode(FirestoreSyncClient.normalizeCode(child.pairingCode))) return
 
         if (current.roleView == RoleView.CHILD && child.isPaired) {
@@ -879,7 +924,9 @@ class SomaTimeStore private constructor(context: Context) {
                     return
                 }
             }
-            FirestoreSyncClient.patchLearnerSync(_state.value.selectedChild)
+            _state.value.selectedChild?.let { latestChild ->
+                FirestoreSyncClient.patchLearnerSync(latestChild)
+            }
         } else if (current.roleView == RoleView.PARENT) {
             val cloudRes = FirestoreSyncClient.fetchPairingSession(child.pairingCode)
             val cloud = cloudRes.data ?: return
@@ -997,6 +1044,7 @@ class SomaTimeStore private constructor(context: Context) {
                 if (it.id == childId) {
                     it.copy(
                         deviceMode = DeviceMode.HAND_OFF,
+                        isPaired = false,
                         isLocked = true,
                         availableScreenSeconds = 0
                     ).also { u -> updatedTarget = u }
@@ -1170,7 +1218,8 @@ class SomaTimeStore private constructor(context: Context) {
         pin: String,
         subjects: List<LearningArea>,
         grade: Int,
-        classStream: String
+        classStream: String,
+        preserveRoleView: Boolean = false
     ): TeacherAccount {
         val code = CbcCurriculumRepository.generateTeacherCode()
         val safeSchool = school.trim().ifEmpty { "Nairobi Primary School" }
@@ -1196,7 +1245,7 @@ class SomaTimeStore private constructor(context: Context) {
         _state.update { s ->
             val nextList = listOf(saved) + s.registeredTeachers.filterNot { it.teacherCode == saved.teacherCode }
             s.copy(
-                roleView = RoleView.TEACHER,
+                roleView = if (preserveRoleView) s.roleView else RoleView.TEACHER,
                 teacherAccount = saved,
                 registeredTeachers = nextList
             ).also(::persistState)
@@ -1511,13 +1560,33 @@ class SomaTimeStore private constructor(context: Context) {
 
     fun resetDemo() {
         prefs.edit().clear().apply()
-        val fresh = SomaTimeUiState().also(::persistState)
-        _state.value = fresh
+        runCatching {
+            appContext.getSharedPreferences(LEGACY_PREFS_V2, Context.MODE_PRIVATE).edit().clear().apply()
+        }
+        _state.value = SomaTimeUiState()
+    }
+
+    fun loadSampleDemo() {
+        val demoChildren = CbcCurriculumRepository.initialChildren()
+        val demoState = SomaTimeUiState(
+            roleView = RoleView.PARENT,
+            selectedChildId = demoChildren.firstOrNull()?.id ?: "",
+            handOffActive = false,
+            demoSeeded = true,
+            parentName = "Grace Wanjiku",
+            parentContact = "0712 345 678",
+            parentPin = CbcCurriculumRepository.PARENT_PIN,
+            children = demoChildren,
+            assignments = CbcCurriculumRepository.initialAssignments(),
+            classRoster = CbcCurriculumRepository.initialClassRoster()
+        ).also(::persistState)
+        _state.value = demoState
         publishExistingChildrenIfParent()
     }
 
     companion object {
-        private const val PREFS_NAME = "somatime_prefs_v2"
+        private const val PREFS_NAME = "somatime_prefs_v3"
+        private const val LEGACY_PREFS_V2 = "somatime_prefs_v2"
 
         @Volatile
         private var instance: SomaTimeStore? = null

@@ -32,6 +32,7 @@ import type {
   CBCRubric,
   ClassStudentRecord,
   LearningArea,
+  ParentAccount,
   TeacherAccount,
   TeacherAssignment,
 } from '../types/somatime';
@@ -44,9 +45,17 @@ import {
 
 interface TeacherPortalProps {
   teacherAccount: TeacherAccount | null;
+  parentAccount?: ParentAccount;
+  defaultChildSchool?: string;
+  defaultChildGrade?: number;
   assignments: TeacherAssignment[];
   classRoster: ClassStudentRecord[];
   onOpenTeacherAuth: () => void;
+  onQuickLinkParentAsTeacher?: (input: {
+    school: string;
+    grade: number;
+    subjects: LearningArea[];
+  }) => Promise<void>;
   onLogoutTeacher: () => void;
   onPushAssignment: (input: {
     classStream: string;
@@ -69,9 +78,13 @@ interface TeacherPortalProps {
 
 export function TeacherPortal({
   teacherAccount,
+  parentAccount,
+  defaultChildSchool,
+  defaultChildGrade,
   assignments,
   classRoster,
   onOpenTeacherAuth,
+  onQuickLinkParentAsTeacher,
   onLogoutTeacher,
   onPushAssignment,
   onJumpToChildMode,
@@ -83,12 +96,15 @@ export function TeacherPortal({
   const defaultFirstSub = defaultStrands[0]?.subStrands[0]?.subStrand ?? 'Fractions in Daily Life';
 
   const [schoolName, setSchoolName] = useState(
-    teacherAccount?.school ?? 'Nairobi Primary School'
+    teacherAccount?.school ?? defaultChildSchool ?? ''
   );
-  const [targetGrade, setTargetGrade] = useState<number>(teacherAccount?.grade ?? 6);
+  const [targetGrade, setTargetGrade] = useState<number>(
+    teacherAccount?.grade ?? defaultChildGrade ?? 6
+  );
   const [classStream, setClassStream] = useState(
     teacherAccount?.classStream ?? CLASS_STREAMS[0].stream
   );
+  const [quickLinking, setQuickLinking] = useState(false);
   const [filterStrandsByGrade, setFilterStrandsByGrade] = useState(false);
   const [selectedArea, setSelectedArea] = useState<LearningArea>(defaultArea);
   const [selectedStrand, setSelectedStrand] = useState(defaultFirstStrand);
@@ -582,13 +598,39 @@ export function TeacherPortal({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onOpenTeacherAuth}
-            className="min-h-[42px] rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-700 shrink-0"
-          >
-            Register / Sign In Now →
-          </button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {parentAccount?.registered && onQuickLinkParentAsTeacher && (
+              <button
+                type="button"
+                disabled={quickLinking}
+                onClick={async () => {
+                  setQuickLinking(true);
+                  try {
+                    await onQuickLinkParentAsTeacher({
+                      school:
+                        schoolName.trim() || defaultChildSchool || 'Nairobi Primary School',
+                      grade: targetGrade || defaultChildGrade || 6,
+                      subjects: [selectedArea],
+                    });
+                  } finally {
+                    setQuickLinking(false);
+                  }
+                }}
+                className="min-h-[42px] rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800 disabled:opacity-60"
+              >
+                {quickLinking
+                  ? 'Linking Parent Account...'
+                  : `Quick-Link as ${parentAccount.name.split(' ')[0]} (Same PIN)`}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onOpenTeacherAuth}
+              className="min-h-[42px] rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-700"
+            >
+              Register / Sign In Now →
+            </button>
+          </div>
         </div>
       )}
 
@@ -657,6 +699,7 @@ export function TeacherPortal({
                   id="teacher-school-input"
                   type="text"
                   required
+                  placeholder="e.g. Nairobi Primary School"
                   value={schoolName}
                   onChange={(e) => setSchoolName(e.target.value)}
                   className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm font-medium text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
@@ -1143,55 +1186,62 @@ export function TeacherPortal({
               Active Priority Assignments
             </h3>
             <div className="mt-3 divide-y divide-slate-100">
-              {assignments.map((assign) => (
-                <div key={assign.id} className="py-3 first:pt-0 last:pb-0">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-bold text-slate-900">{assign.title}</p>
-                      <p className="mt-0.5 text-xs text-slate-600">
-                        {assign.school ? `${assign.school} · ` : ''}
-                        Grade {assign.grade} · {assign.learningArea} · {assign.strand}
-                      </p>
-                      {(assign.isCustom ||
-                        assign.customQuestions?.length ||
-                        assign.attachmentName) && (
-                        <p className="mt-0.5 text-[11px] font-medium text-slate-700">
-                          Custom Task
-                          {assign.customQuestions?.length
-                            ? ` · ${assign.customQuestions.length} teacher question(s)`
-                            : ''}
-                          {assign.attachmentName ? ` · File: ${assign.attachmentName}` : ''}
+              {assignments.length === 0 ? (
+                <p className="py-3 text-xs text-slate-500">
+                  No assignments pushed yet. Use the form above to push a CBC strand or upload a
+                  custom assignment.
+                </p>
+              ) : (
+                assignments.map((assign) => (
+                  <div key={assign.id} className="py-3 first:pt-0 last:pb-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{assign.title}</p>
+                        <p className="mt-0.5 text-xs text-slate-600">
+                          {assign.school ? `${assign.school} · ` : ''}
+                          Grade {assign.grade} · {assign.learningArea} · {assign.strand}
                         </p>
-                      )}
-                      {assign.attachmentUrl && isSafeAttachmentUrl(assign.attachmentUrl) && (
-                        <a
-                          href={assign.attachmentUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 hover:underline"
-                        >
-                          <FileText className="h-3 w-3" />
-                          <span>Open Uploaded Material</span>
-                        </a>
-                      )}
-                      {assign.teacherName && (
-                        <p className="mt-0.5 text-[11px] font-medium text-teal-800">
-                          Pushed by {assign.teacherName}
-                          {assign.teacherCode ? ` (${assign.teacherCode})` : ''}
-                        </p>
-                      )}
+                        {(assign.isCustom ||
+                          assign.customQuestions?.length ||
+                          assign.attachmentName) && (
+                          <p className="mt-0.5 text-[11px] font-medium text-slate-700">
+                            Custom Task
+                            {assign.customQuestions?.length
+                              ? ` · ${assign.customQuestions.length} teacher question(s)`
+                              : ''}
+                            {assign.attachmentName ? ` · File: ${assign.attachmentName}` : ''}
+                          </p>
+                        )}
+                        {assign.attachmentUrl && isSafeAttachmentUrl(assign.attachmentUrl) && (
+                          <a
+                            href={assign.attachmentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 hover:underline"
+                          >
+                            <FileText className="h-3 w-3" />
+                            <span>Open Uploaded Material</span>
+                          </a>
+                        )}
+                        {assign.teacherName && (
+                          <p className="mt-0.5 text-[11px] font-medium text-teal-800">
+                            Pushed by {assign.teacherName}
+                            {assign.teacherCode ? ` (${assign.teacherCode})` : ''}
+                          </p>
+                        )}
+                      </div>
+                      <span className="font-mono text-xs font-semibold text-teal-800 tabular-nums shrink-0">
+                        {assign.pushedAt}
+                      </span>
                     </div>
-                    <span className="font-mono text-xs font-semibold text-teal-800 tabular-nums shrink-0">
-                      {assign.pushedAt}
-                    </span>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {assign.completedByChildIds.length > 0
+                        ? `Completed by ${assign.completedByChildIds.length} synced child profile(s)`
+                        : 'Pending completion on synced child devices'}
+                    </p>
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {assign.completedByChildIds.length > 0
-                      ? `Completed by ${assign.completedByChildIds.length} synced child profile(s)`
-                      : 'Pending completion on synced child devices'}
-                  </p>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </section>
@@ -1297,7 +1347,9 @@ export function TeacherPortal({
                   {filteredStudents.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-6 text-center text-slate-500">
-                        No students match the selected filter in {rosterStreamFilter}.
+                        {classRoster.length === 0
+                          ? 'No learner roster records yet. Completed learner sessions sync here automatically.'
+                          : `No students match the selected filter in ${rosterStreamFilter}.`}
                       </td>
                     </tr>
                   ) : (

@@ -129,7 +129,7 @@ class MainActivity : ComponentActivity() {
         val uiState = store.state.value
         takeoverLockEnforced = uiState.isTakeoverLocked
         if (uiState.roleView == RoleView.CHILD &&
-            (uiState.selectedChild.isPaired || uiState.handOffActive) &&
+            uiState.isChildLockEnforced &&
             !uiState.guardServiceRunning
         ) {
             runCatching { ScreenTimeGuardService.start(this) }
@@ -143,7 +143,7 @@ class MainActivity : ComponentActivity() {
         store.setMainActivityForeground(false)
         val uiState = store.state.value
         if (uiState.roleView == RoleView.CHILD &&
-            (uiState.selectedChild.isPaired || uiState.handOffActive) &&
+            uiState.isChildLockEnforced &&
             !uiState.guardServiceRunning
         ) {
             runCatching { ScreenTimeGuardService.start(this) }
@@ -279,16 +279,24 @@ private fun SomaTimeRoot(
     val uiState by store.state.collectAsState()
     var pinIntent by remember { mutableStateOf<PinIntent?>(null) }
 
-    LaunchedEffect(uiState.roleView, uiState.selectedChild.id, uiState.selectedChild.isPaired, uiState.handOffActive) {
+    val activeChild = uiState.selectedChild
+
+    LaunchedEffect(
+        uiState.roleView,
+        activeChild?.id,
+        activeChild?.isPaired,
+        activeChild?.deviceMode,
+        uiState.handOffActive
+    ) {
         if (uiState.roleView == RoleView.CHILD &&
-            (uiState.selectedChild.isPaired || uiState.handOffActive) &&
+            uiState.isChildLockEnforced &&
             !uiState.guardServiceRunning
         ) {
             runCatching { ScreenTimeGuardService.start(context) }
         }
     }
 
-    LaunchedEffect(uiState.roleView, uiState.selectedChild.id) {
+    LaunchedEffect(uiState.roleView, activeChild?.id) {
         while (isActive) {
             runCatching { store.syncPairedChildWithCloud() }
             delay(6000L)
@@ -310,7 +318,7 @@ private fun SomaTimeRoot(
     }
 
     fun handleRoleSelect(nextRole: RoleView) {
-        if ((uiState.handOffActive || uiState.selectedChild.isPaired) &&
+        if (uiState.isChildLockEnforced &&
             uiState.roleView == RoleView.CHILD &&
             nextRole != RoleView.CHILD
         ) {
@@ -321,8 +329,7 @@ private fun SomaTimeRoot(
         }
     }
 
-    val isLearnerLoggedIn = uiState.roleView == RoleView.CHILD &&
-        (uiState.selectedChild.isPaired || uiState.handOffActive)
+    val isLearnerLoggedIn = uiState.roleView == RoleView.CHILD && uiState.isChildLockEnforced
 
     Scaffold(
         containerColor = Color(0xFFF8FAFC),
@@ -342,9 +349,9 @@ private fun SomaTimeRoot(
                             fontWeight = FontWeight.ExtraBold,
                             color = SomaTeal
                         )
-                        if (isLearnerLoggedIn) {
+                        if (isLearnerLoggedIn && activeChild != null) {
                             Text(
-                                "Learner · ${uiState.selectedChild.name.split(" ").first()} · Grade ${uiState.selectedChild.grade}",
+                                "Learner · ${activeChild.name.split(" ").first()} · Grade ${activeChild.grade}",
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = SomaTeal
@@ -412,7 +419,18 @@ private fun SomaTimeRoot(
                     uiState = uiState,
                     onRegisterParentAndChild = store::registerParentAndChildAsync,
                     onPairLearnerCode = store::pairLearnerByCodeAsync,
-                    onRegisterTeacher = store::registerTeacherAsync,
+                    onRegisterTeacher = { fullName, school, tsc, pin, subjects, grade, stream, preserveRoleView ->
+                        store.registerTeacherAsync(
+                            fullName = fullName,
+                            school = school,
+                            tscNumber = tsc,
+                            pin = pin,
+                            subjects = subjects,
+                            grade = grade,
+                            classStream = stream,
+                            preserveRoleView = preserveRoleView
+                        )
+                    },
                     onLoginTeacher = store::loginTeacherAsync,
                     onRetryCloudSync = store::retryCloudSyncNow,
                     onDismiss = { store.setShowSetupWizard(false) }
@@ -449,6 +467,9 @@ private fun SomaTimeRoot(
                         onRegeneratePairingCode = store::regeneratePairingCode,
                         onRetryCloudSync = store::retryCloudSyncNow,
                         onOpenSetupWizard = { store.setShowSetupWizard(true) },
+                        onOpenSetupTab = { tab -> store.setShowSetupWizard(true, tab) },
+                        onOpenTeacherPortal = { store.setRoleView(RoleView.TEACHER) },
+                        onLoadSampleDemo = store::loadSampleDemo,
                         onRequestApprovalPin = { approval ->
                             pinIntent = PinIntent.ApproveMinutes(approval)
                         },
@@ -470,6 +491,7 @@ private fun SomaTimeRoot(
                         onOpenPinUnlock = { pinIntent = PinIntent.UnlockChild },
                         onOpenExitHandOff = { pinIntent = PinIntent.ExitHandOff(RoleView.PARENT) },
                         onOpenSetupWizard = { store.setShowSetupWizard(true, SetupWizardTab.LEARNER) },
+                        onOpenParentSetup = { store.setShowSetupWizard(true, SetupWizardTab.PARENT) },
                         onRecordDisplayedAssignment = store::recordDisplayedAssignment,
                         onMinimizeAndResumeApp = onMinimizeAndResumeApp,
                         onCompleteLesson = store::completeLesson
@@ -478,6 +500,17 @@ private fun SomaTimeRoot(
                     RoleView.TEACHER -> TeacherPortalScreen(
                         uiState = uiState,
                         onOpenTeacherAuth = { store.setShowSetupWizard(true, SetupWizardTab.TEACHER) },
+                        onQuickLinkParentAsTeacher = { school, grade, subjects ->
+                            store.registerTeacherAsync(
+                                fullName = uiState.parentName.ifBlank { "Teacher" },
+                                school = school,
+                                tscNumber = "",
+                                pin = uiState.parentPin.ifBlank { "1234" },
+                                subjects = subjects,
+                                grade = grade,
+                                classStream = "Grade $grade East - $school"
+                            )
+                        },
                         onLogoutTeacher = store::logoutTeacher,
                         onPushAssignment = store::pushAssignment,
                         onPreviewChildMode = { store.setRoleView(RoleView.CHILD) }
@@ -490,9 +523,13 @@ private fun SomaTimeRoot(
     when (val intent = pinIntent) {
         is PinIntent.ExitHandOff -> PinDialog(
             title = "Exit Protected Child Mode",
-            subtitle = "Enter Parent PIN to exit ${uiState.selectedChild.name}'s locked mode.",
+            subtitle = "Enter Parent PIN to return from ${activeChild?.name ?: "Learner"}'s child lock.",
             expectedPin = uiState.parentPin,
-            confirmLabel = "Exit to Parent",
+            confirmLabel = if (intent.targetRole == RoleView.TEACHER) "Exit to Teacher" else "Exit to Parent",
+            exitTargetRole = if (intent.targetRole == RoleView.TEACHER) RoleView.TEACHER else RoleView.PARENT,
+            onChangeExitTargetRole = { nextTarget ->
+                pinIntent = PinIntent.ExitHandOff(nextTarget)
+            },
             onSuccess = {
                 store.exitHandOffTo(intent.targetRole)
                 pinIntent = null
@@ -502,11 +539,11 @@ private fun SomaTimeRoot(
 
         PinIntent.UnlockChild -> PinDialog(
             title = "Parent PIN Screen Unlock",
-            subtitle = "Enter Parent PIN to grant +15 mins to ${uiState.selectedChild.name}.",
+            subtitle = "Enter Parent PIN to grant +15 mins to ${activeChild?.name ?: "Learner"}.",
             expectedPin = uiState.parentPin,
             confirmLabel = "Unlock +15m",
             onSuccess = {
-                store.unlockWithParentPin(uiState.selectedChild.id, 15)
+                activeChild?.let { store.unlockWithParentPin(it.id, 15) }
                 pinIntent = null
             },
             onDismiss = { pinIntent = null }
@@ -518,7 +555,7 @@ private fun SomaTimeRoot(
             expectedPin = uiState.parentPin,
             confirmLabel = "Approve",
             onSuccess = {
-                store.resolveApproval(uiState.selectedChild.id, intent.approval.id, approved = true)
+                activeChild?.let { store.resolveApproval(it.id, intent.approval.id, approved = true) }
                 pinIntent = null
             },
             onDismiss = { pinIntent = null }

@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.somatime.app.data.CbcCurriculumRepository
+import com.somatime.app.data.SetupWizardTab
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.data.SomaTimeUiState
 import com.somatime.app.guard.ScreenTimeGuardService
@@ -71,6 +72,7 @@ import com.somatime.app.guard.UsageAccessHelper
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
 import com.somatime.app.model.PendingApproval
+import com.somatime.app.ui.theme.SomaAmber
 import com.somatime.app.ui.theme.SomaEmerald
 import com.somatime.app.ui.theme.SomaTeal
 
@@ -89,6 +91,9 @@ fun ParentDashboardScreen(
     onRegeneratePairingCode: (String) -> Unit,
     onRetryCloudSync: () -> Unit,
     onOpenSetupWizard: () -> Unit,
+    onOpenSetupTab: (SetupWizardTab) -> Unit,
+    onOpenTeacherPortal: () -> Unit,
+    onLoadSampleDemo: () -> Unit,
     onRequestApprovalPin: (PendingApproval) -> Unit,
     onDeclineApproval: (String, String) -> Unit,
     onUpdateParentPin: (String) -> Boolean,
@@ -98,6 +103,66 @@ fun ParentDashboardScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val child = uiState.selectedChild
+    if (child == null) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Spacer(modifier = Modifier.height(6.dp))
+                Card(
+                    shape = RoundedCornerShape(22.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            "Welcome to SomaTime · Fresh Start",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "All prior user data has been cleared. Register as a parent and set your own 4-digit PIN, pair a learner's device, or sign in as a teacher.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF475569)
+                        )
+                        Button(
+                            onClick = { onOpenSetupTab(SetupWizardTab.PARENT) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
+                        ) {
+                            Text("1. Register Parent & Add Child")
+                        }
+                        OutlinedButton(
+                            onClick = { onOpenSetupTab(SetupWizardTab.LEARNER) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("2. Pair Learner Phone with Code")
+                        }
+                        OutlinedButton(
+                            onClick = { onOpenSetupTab(SetupWizardTab.TEACHER) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("3. Teacher Registration & Sign In")
+                        }
+                        HorizontalDivider()
+                        TextButton(
+                            onClick = onLoadSampleDemo,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Load Sample Demo Profiles (Optional)", color = SomaAmber)
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
     var showAddDialog by remember { mutableStateOf(false) }
 
     var newPinInput by remember { mutableStateOf("") }
@@ -686,6 +751,53 @@ fun ParentDashboardScreen(
                     ) {
                         Text("Open Setup & Pair Learner Wizard")
                     }
+
+                    if (child.deviceMode == DeviceMode.HAND_OFF || uiState.teacherAccount != null) {
+                        HorizontalDivider()
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFFF0FDFA),
+                            border = BorderStroke(1.dp, Color(0xFF99F6E4))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    "3-in-1 Single-Phone Mode (Parent + Teacher + Child)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SomaTeal
+                                )
+                                Text(
+                                    "1. Parent PIN protects settings & Child Lock exit.\n" +
+                                        "2. Teacher: ${uiState.teacherAccount?.let { "${it.teacherCode} · ${it.school}" } ?: "Not linked yet"}\n" +
+                                        "3. Child Hand-Off: No second phone or pairing code needed — tap Activate Child Lock above.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF334155)
+                                )
+                                Button(
+                                    onClick = {
+                                        if (uiState.teacherAccount != null) {
+                                            onOpenTeacherPortal()
+                                        } else {
+                                            onOpenSetupTab(SetupWizardTab.TEACHER)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
+                                ) {
+                                    Text(
+                                        if (uiState.teacherAccount != null) {
+                                            "Open Teacher Portal →"
+                                        } else {
+                                            "Link Teacher Profile on This Phone →"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -881,7 +993,7 @@ fun ParentDashboardScreen(
 
     if (showAddDialog) {
         var newName by remember { mutableStateOf("") }
-        var newSchool by remember { mutableStateOf("Nairobi Primary School") }
+        var newSchool by remember { mutableStateOf("") }
         var newGrade by remember { mutableIntStateOf(5) }
 
         AlertDialog(
@@ -898,7 +1010,7 @@ fun ParentDashboardScreen(
                     OutlinedTextField(
                         value = newSchool,
                         onValueChange = { newSchool = it },
-                        label = { Text("School Name") },
+                        label = { Text("School Name (e.g. Nairobi Primary School)") },
                         singleLine = true
                     )
                     Text("Grade: $newGrade (${CbcCurriculumRepository.levelGroupForGrade(newGrade)})")

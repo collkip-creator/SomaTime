@@ -23,6 +23,7 @@ interface LessonPlayerProps {
   isPinnedLock?: boolean;
   resumedAppName?: string | null;
   onOpenPinUnlock?: () => void;
+  onOpenExitHandOff?: () => void;
   onAutoMinimized?: (appName: string | null) => void;
   onComplete: (scorePercent: number) => {
     minutesEarned: number;
@@ -41,6 +42,7 @@ export function LessonPlayer({
   isPinnedLock = false,
   resumedAppName = null,
   onOpenPinUnlock,
+  onOpenExitHandOff,
   onAutoMinimized,
   onComplete,
   onExit,
@@ -231,7 +233,7 @@ export function LessonPlayer({
       {/* Header & Progress */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {isPinnedLock ? (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-xl bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900">
               <ShieldCheck className="h-4 w-4 text-amber-700" />
               <span>Pinned Auto-Assignment</span>
@@ -243,7 +245,17 @@ export function LessonPlayer({
                 className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
               >
                 <KeyRound className="h-3.5 w-3.5 text-teal-700" />
-                <span>Parent PIN</span>
+                <span>Parent PIN (+15m)</span>
+              </button>
+            )}
+            {onOpenExitHandOff && (
+              <button
+                type="button"
+                onClick={onOpenExitHandOff}
+                className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-bold text-teal-900 hover:bg-teal-100"
+              >
+                <KeyRound className="h-3.5 w-3.5 text-teal-700" />
+                <span>Exit Lock (PIN)</span>
               </button>
             )}
           </div>

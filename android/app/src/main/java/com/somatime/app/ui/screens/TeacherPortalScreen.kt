@@ -75,19 +75,22 @@ import kotlinx.coroutines.launch
 fun TeacherPortalScreen(
     uiState: SomaTimeUiState,
     onOpenTeacherAuth: () -> Unit,
+    onQuickLinkParentAsTeacher: suspend (school: String, grade: Int, subjects: List<LearningArea>) -> Unit,
     onLogoutTeacher: () -> Unit,
     onPushAssignment: (PushAssignmentRequest) -> Unit,
     onPreviewChildMode: () -> Unit
 ) {
     val activeTeacher = uiState.teacherAccount
+    val childFallback = uiState.selectedChild
     val initialArea = activeTeacher?.subjects?.firstOrNull() ?: LearningArea.MATHEMATICS
     val initialGroupedStrands = CbcCurriculumRepository.groupedStrandsForArea(initialArea)
 
-    var schoolName by remember { mutableStateOf(activeTeacher?.school ?: "Nairobi Primary School") }
-    var targetGrade by remember { mutableIntStateOf(activeTeacher?.grade ?: 6) }
+    var schoolName by remember { mutableStateOf(activeTeacher?.school ?: childFallback?.school ?: "") }
+    var targetGrade by remember { mutableIntStateOf(activeTeacher?.grade ?: childFallback?.grade ?: 6) }
     var classStream by remember {
         mutableStateOf(activeTeacher?.classStream ?: CbcCurriculumRepository.classStreams.first())
     }
+    var isQuickLinking by remember { mutableStateOf(false) }
     var filterStrandsByGrade by remember { mutableStateOf(false) }
     var selectedArea by remember { mutableStateOf(initialArea) }
     var selectedStrand by remember {
@@ -358,6 +361,33 @@ fun TeacherPortalScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF475569)
                         )
+                        if (uiState.isParentRegistered) {
+                            Button(
+                                onClick = {
+                                    if (isQuickLinking) return@Button
+                                    isQuickLinking = true
+                                    coroutineScope.launch {
+                                        onQuickLinkParentAsTeacher(
+                                            schoolName.trim().ifEmpty { childFallback?.school ?: "Nairobi Primary School" },
+                                            targetGrade,
+                                            listOf(selectedArea)
+                                        )
+                                        isQuickLinking = false
+                                    }
+                                },
+                                enabled = !isQuickLinking,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
+                            ) {
+                                Text(
+                                    if (isQuickLinking) {
+                                        "Linking Parent Account..."
+                                    } else {
+                                        "Quick-Link as ${uiState.parentName.split(" ").first()} (Same PIN)"
+                                    }
+                                )
+                            }
+                        }
                         Button(
                             onClick = onOpenTeacherAuth,
                             modifier = Modifier.fillMaxWidth(),
@@ -962,6 +992,13 @@ fun TeacherPortalScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    if (uiState.assignments.isEmpty()) {
+                        Text(
+                            "No assignments pushed yet. Use the composer above to push a CBC strand or custom assignment.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF64748B)
+                        )
+                    }
                     uiState.assignments.forEach { assign ->
                         Surface(
                             shape = RoundedCornerShape(12.dp),

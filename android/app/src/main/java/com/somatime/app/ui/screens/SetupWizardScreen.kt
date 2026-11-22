@@ -38,6 +38,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -108,7 +109,8 @@ fun SetupWizardScreen(
         pin: String,
         subjects: List<LearningArea>,
         grade: Int,
-        classStream: String
+        classStream: String,
+        preserveRoleView: Boolean
     ) -> TeacherAccount,
     onLoginTeacher: suspend (teacherCode: String, pin: String) -> TeacherLoginResult,
     onRetryCloudSync: () -> Unit,
@@ -139,12 +141,17 @@ fun SetupWizardScreen(
     var showParentPin by remember { mutableStateOf(false) }
     var childName by remember { mutableStateOf("") }
     var childGrade by remember { mutableIntStateOf(5) }
-    var childSchool by remember { mutableStateOf("Nairobi Primary School") }
+    var childSchool by remember { mutableStateOf("") }
     var dailyCapMins by remember { mutableIntStateOf(90) }
     var initialWatchMins by remember { mutableIntStateOf(5) }
+    var alsoTeacher by remember { mutableStateOf(false) }
+    var parentTeacherSchool by remember { mutableStateOf("") }
+    var parentTeacherGrade by remember { mutableIntStateOf(5) }
+    var parentTeacherSubjects by remember { mutableStateOf(listOf(LearningArea.MATHEMATICS)) }
     var formError by remember { mutableStateOf("") }
     var isSavingParent by remember { mutableStateOf(false) }
     var generatedChild by remember { mutableStateOf<ChildProfile?>(null) }
+    var linkedTeacherAccount by remember { mutableStateOf<TeacherAccount?>(null) }
 
     var pairingInput by remember { mutableStateOf("") }
     var pairingFeedback by remember { mutableStateOf("") }
@@ -153,7 +160,7 @@ fun SetupWizardScreen(
     // Teacher registration & login states
     var teacherIsRegisterTab by remember { mutableStateOf(true) }
     var teacherName by remember { mutableStateOf("") }
-    var teacherSchool by remember { mutableStateOf("Nairobi Primary School") }
+    var teacherSchool by remember { mutableStateOf("") }
     var teacherTscNo by remember { mutableStateOf("") }
     var teacherPin by remember { mutableStateOf("") }
     var teacherGrade by remember { mutableIntStateOf(6) }
@@ -413,7 +420,7 @@ fun SetupWizardScreen(
                             OutlinedTextField(
                                 value = childSchool,
                                 onValueChange = { childSchool = it },
-                                label = { Text("School Name") },
+                                label = { Text("School Name (e.g. Nairobi Primary School)") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
@@ -451,6 +458,96 @@ fun SetupWizardScreen(
                                 valueRange = 0f..30f,
                                 steps = 5
                             )
+
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color(0xFFF8FAFC),
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "I am also a Teacher (3-in-1 phone)",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                "Enable Teacher Portal on this same phone with your Parent Name & PIN.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color(0xFF475569)
+                                            )
+                                        }
+                                        Switch(
+                                            checked = alsoTeacher,
+                                            onCheckedChange = { checked ->
+                                                alsoTeacher = checked
+                                                if (checked) {
+                                                    if (parentTeacherSchool.isBlank() && childSchool.isNotBlank()) {
+                                                        parentTeacherSchool = childSchool
+                                                    }
+                                                    parentTeacherGrade = childGrade
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    if (alsoTeacher) {
+                                        OutlinedTextField(
+                                            value = parentTeacherSchool,
+                                            onValueChange = { parentTeacherSchool = it },
+                                            label = { Text("School Where You Teach") },
+                                            placeholder = { Text(childSchool.ifBlank { "e.g. Nairobi Primary School" }) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        Text(
+                                            "Grade Taught: $parentTeacherGrade (${CbcCurriculumRepository.levelGroupForGrade(parentTeacherGrade)})",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Slider(
+                                            value = parentTeacherGrade.toFloat(),
+                                            onValueChange = { parentTeacherGrade = it.toInt() },
+                                            valueRange = 1f..12f,
+                                            steps = 10
+                                        )
+                                        Text(
+                                            "Subjects (${parentTeacherSubjects.size}/8):",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            LearningArea.entries.take(10).forEach { area ->
+                                                val selected = area in parentTeacherSubjects
+                                                FilterChip(
+                                                    selected = selected,
+                                                    onClick = {
+                                                        parentTeacherSubjects = if (selected) {
+                                                            if (parentTeacherSubjects.size > 1) parentTeacherSubjects - area else parentTeacherSubjects
+                                                        } else if (parentTeacherSubjects.size < 8) {
+                                                            parentTeacherSubjects + area
+                                                        } else {
+                                                            parentTeacherSubjects
+                                                        }
+                                                    },
+                                                    label = { Text(area.displayName) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             if (formError.isNotEmpty()) {
                                 Text(
@@ -496,6 +593,23 @@ fun SetupWizardScreen(
                                                 dailyCapMins,
                                                 initialWatchMins
                                             )
+                                            if (alsoTeacher) {
+                                                val tSchool = parentTeacherSchool.trim()
+                                                    .ifEmpty { childSchool.trim().ifEmpty { "Nairobi Primary School" } }
+                                                val tGrade = parentTeacherGrade
+                                                linkedTeacherAccount = onRegisterTeacher(
+                                                    parentName.trim().ifEmpty { "Teacher" },
+                                                    tSchool,
+                                                    "",
+                                                    parentPin,
+                                                    parentTeacherSubjects,
+                                                    tGrade,
+                                                    "Grade $tGrade East - $tSchool",
+                                                    true
+                                                )
+                                            } else {
+                                                linkedTeacherAccount = null
+                                            }
                                             generatedChild = created
                                             pairingInput = if (created.licenseActive) created.pairingCode else ""
                                             isSavingParent = false
@@ -507,7 +621,11 @@ fun SetupWizardScreen(
                                     colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
                                 ) {
                                     Text(
-                                        if (isSavingParent) "Syncing to Cloud..." else "Save Parent Setup"
+                                        when {
+                                            isSavingParent -> "Syncing to Cloud..."
+                                            alsoTeacher -> "Save Parent + Teacher & Child"
+                                            else -> "Save Parent Setup"
+                                        }
                                     )
                                 }
                             }
@@ -542,6 +660,27 @@ fun SetupWizardScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
+                            if (linkedTeacherAccount != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color.White,
+                                    border = BorderStroke(1.dp, SomaTeal)
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text(
+                                            "Teacher Profile Also Active: ${linkedTeacherAccount!!.teacherCode}",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = SomaTeal
+                                        )
+                                        Text(
+                                            "${linkedTeacherAccount!!.school} · Grade ${linkedTeacherAccount!!.grade} · Uses same Parent PIN",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = Color(0xFF334155)
+                                        )
+                                    }
+                                }
+                            }
                             Text(
                                 if (licensed) {
                                     "Enter this Pairing Code on ${created?.name ?: "your child"}'s phone under \"Register as a Learner\":"
@@ -835,7 +974,7 @@ fun SetupWizardScreen(
                                 OutlinedTextField(
                                     value = teacherSchool,
                                     onValueChange = { teacherSchool = it },
-                                    label = { Text("School Name") },
+                                    label = { Text("School Name (e.g. Nairobi Primary School)") },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true
                                 )
@@ -952,7 +1091,8 @@ fun SetupWizardScreen(
                                                     teacherPin,
                                                     teacherSubjects,
                                                     teacherGrade,
-                                                    fullStream
+                                                    fullStream,
+                                                    false
                                                 )
                                                 createdTeacher = created
                                                 isSavingTeacher = false

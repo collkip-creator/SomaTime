@@ -4,7 +4,7 @@ import type { ChildProfile, RoleView } from '../types/somatime';
 interface TopDemoBarProps {
   roleView: RoleView;
   handOffActive: boolean;
-  selectedChild: ChildProfile;
+  selectedChild: ChildProfile | null;
   onSelectRole: (role: RoleView) => void;
   onOpenSetup: () => void;
   onResetDemo: () => void;
@@ -30,7 +30,11 @@ export function TopDemoBar({
   ];
 
   const isLearnerLoggedIn =
-    roleView === 'child' && (selectedChild.isPaired || handOffActive);
+    roleView === 'child' &&
+    Boolean(
+      selectedChild &&
+        (handOffActive || (selectedChild.isPaired && selectedChild.deviceMode === 'own_phone'))
+    );
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur-md">
@@ -44,11 +48,12 @@ export function TopDemoBar({
           </span>
         </div>
 
-        {isLearnerLoggedIn ? (
+        {isLearnerLoggedIn && selectedChild ? (
           <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-900">
             <Smartphone className="h-3.5 w-3.5 text-emerald-700" />
             <span>
-              Learner Mode · {selectedChild.name.split(' ')[0]} · Grade {selectedChild.grade}
+              {handOffActive ? 'Shared Child Lock' : 'Learner Mode'} ·{' '}
+              {selectedChild.name.split(' ')[0]} · Grade {selectedChild.grade}
             </span>
           </div>
         ) : (
@@ -59,7 +64,7 @@ export function TopDemoBar({
             {roles.map((r) => {
               const Icon = r.icon;
               const active = roleView === r.id;
-              const lockedOut = handOffActive && roleView === 'child' && r.id !== 'child';
+              const lockedOut = isLearnerLoggedIn && r.id !== 'child';
               return (
                 <button
                   key={r.id}
@@ -85,10 +90,16 @@ export function TopDemoBar({
         )}
 
         <div className="flex items-center gap-2 shrink-0">
-          <span className="hidden text-xs text-slate-600 xl:inline whitespace-nowrap">
-            Active: <strong className="font-semibold text-slate-900">{selectedChild.name}</strong> · Grade{' '}
-            {selectedChild.grade}
-          </span>
+          {selectedChild ? (
+            <span className="hidden text-xs text-slate-600 xl:inline whitespace-nowrap">
+              Active: <strong className="font-semibold text-slate-900">{selectedChild.name}</strong> · Grade{' '}
+              {selectedChild.grade}
+            </span>
+          ) : (
+            <span className="hidden text-xs text-slate-500 xl:inline whitespace-nowrap">
+              Fresh Start · No profiles yet
+            </span>
+          )}
           {!isLearnerLoggedIn && (
             <>
               <button
@@ -103,11 +114,11 @@ export function TopDemoBar({
               <button
                 type="button"
                 onClick={onResetDemo}
-                title="Reset demo data"
+                title="Reset all users data"
                 className="flex min-h-[38px] items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 hover:text-slate-900 whitespace-nowrap shrink-0"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                <span className="hidden md:inline">Reset</span>
+                <span className="hidden md:inline">Reset Data</span>
               </button>
             </>
           )}

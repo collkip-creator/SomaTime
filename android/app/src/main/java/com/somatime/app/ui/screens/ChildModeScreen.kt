@@ -76,11 +76,58 @@ fun ChildModeScreen(
     onOpenPinUnlock: () -> Unit,
     onOpenExitHandOff: () -> Unit,
     onOpenSetupWizard: () -> Unit,
+    onOpenParentSetup: () -> Unit,
     onRecordDisplayedAssignment: (String, String, String, Boolean) -> Unit,
     onMinimizeAndResumeApp: () -> Unit,
     onCompleteLesson: (String, CBCLesson, Int) -> LessonCompletionResult
 ) {
     val child = uiState.selectedChild
+    if (child == null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Card(
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "No Learner Profile Yet",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Pair this device with a parent's SOMA pairing code or register as a parent first to set your child's grade and CBC learning rules.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF475569)
+                    )
+                    Button(
+                        onClick = onOpenSetupWizard,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E))
+                    ) {
+                        Text("Pair with Parent Code")
+                    }
+                    OutlinedButton(
+                        onClick = onOpenParentSetup,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Register Parent & Child")
+                    }
+                }
+            }
+        }
+        return
+    }
     val learnerGrade = child.grade
     val isLocked = child.isLocked || child.availableScreenSeconds <= 0
     val pendingAssignments = uiState.assignments.filter {
@@ -179,6 +226,7 @@ fun ChildModeScreen(
                 isPriority = activeIsPriority,
                 resumedAppLabel = interruptedAppLabel,
                 onOpenPinUnlock = onOpenPinUnlock,
+                onOpenExitHandOff = if (uiState.isChildLockEnforced) onOpenExitHandOff else null,
                 onMinimizeAndResumeApp = onMinimizeAndResumeApp,
                 onComplete = { score -> onCompleteLesson(child.id, currentLesson, score) },
                 onExit = { activeLesson = null }
@@ -212,23 +260,26 @@ fun ChildModeScreen(
                         color = Color(0xFF475569)
                     )
                     Text(
-                        if (child.isPaired) {
-                            "Paired (${child.pairingCode}) · Background watch-minute guard active"
-                        } else {
-                            "Unpaired device · Tap Register as Learner to enter parent code"
+                        when {
+                            uiState.handOffActive -> "Shared-Phone Child Lock active · PIN required to exit"
+                            child.isPaired && child.deviceMode == com.somatime.app.model.DeviceMode.OWN_PHONE ->
+                                "Paired (${child.pairingCode}) · Background watch-minute guard active"
+                            child.deviceMode == com.somatime.app.model.DeviceMode.HAND_OFF ->
+                                "Shared Phone Ready · Tap Activate Child Lock on Parent tab to lock"
+                            else -> "Unpaired device · Tap Pair to enter parent code"
                         },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (child.isPaired) SomaEmerald else Color(0xFF64748B),
+                        color = if (uiState.isChildLockEnforced) SomaEmerald else Color(0xFF64748B),
                         fontWeight = FontWeight.SemiBold
                     )
                 }
-                if (uiState.handOffActive || child.isPaired) {
+                if (uiState.isChildLockEnforced) {
                     OutlinedButton(onClick = onOpenExitHandOff) {
                         Icon(Icons.Rounded.Key, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Exit")
                     }
-                } else {
+                } else if (child.deviceMode != com.somatime.app.model.DeviceMode.HAND_OFF) {
                     OutlinedButton(onClick = onOpenSetupWizard) {
                         Icon(Icons.Rounded.Key, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
@@ -638,6 +689,7 @@ private fun NativeLessonPlayer(
     isPriority: Boolean,
     resumedAppLabel: String?,
     onOpenPinUnlock: () -> Unit,
+    onOpenExitHandOff: (() -> Unit)? = null,
     onMinimizeAndResumeApp: () -> Unit,
     onComplete: (Int) -> LessonCompletionResult,
     onExit: () -> Unit
@@ -760,10 +812,17 @@ private fun NativeLessonPlayer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isPinnedTakeover) {
-                    OutlinedButton(onClick = onOpenPinUnlock) {
-                        Icon(Icons.Rounded.Key, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Parent PIN")
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(onClick = onOpenPinUnlock) {
+                            Icon(Icons.Rounded.Key, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("+15m PIN")
+                        }
+                        if (onOpenExitHandOff != null) {
+                            OutlinedButton(onClick = onOpenExitHandOff) {
+                                Text("Exit Lock")
+                            }
+                        }
                     }
                 } else {
                     OutlinedButton(onClick = onExit) { Text("Back") }

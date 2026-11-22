@@ -24,13 +24,21 @@ import {
   getSubjectsForGrade,
 } from '../data/cbcCurriculum';
 import { formatTimeClock } from '../hooks/useSomaTimeStore';
-import type { ChildProfile, DeviceMode, LearningArea, PendingApproval } from '../types/somatime';
+import type {
+  ChildProfile,
+  DeviceMode,
+  LearningArea,
+  PendingApproval,
+  TeacherAccount,
+} from '../types/somatime';
 
 interface ParentDashboardProps {
   childrenList: ChildProfile[];
   selectedChild: ChildProfile;
+  parentName: string;
   parentPin: string;
   parentContact: string;
+  teacherAccount: TeacherAccount | null;
   cloudSyncOk: boolean;
   cloudSyncMessage: string;
   onRetryCloudSync: () => void;
@@ -46,6 +54,8 @@ interface ParentDashboardProps {
   onRegeneratePairingCode: (id: string) => string | null;
   onOpenLearnerPair: () => void;
   onOpenParentRegistration: () => void;
+  onOpenTeacherPortal: () => void;
+  onOpenTeacherSetup: () => void;
   onAddChild: (input: { name: string; grade: number; school: string }) => void;
   onActivateHandOff: (id: string) => boolean;
   onRequestApprovalPin: (approval: PendingApproval) => void;
@@ -55,8 +65,10 @@ interface ParentDashboardProps {
 export function ParentDashboard({
   childrenList,
   selectedChild,
+  parentName,
   parentPin,
   parentContact,
+  teacherAccount,
   cloudSyncOk,
   cloudSyncMessage,
   onRetryCloudSync,
@@ -68,6 +80,8 @@ export function ParentDashboard({
   onRegeneratePairingCode,
   onOpenLearnerPair,
   onOpenParentRegistration,
+  onOpenTeacherPortal,
+  onOpenTeacherSetup,
   onAddChild,
   onActivateHandOff,
   onRequestApprovalPin,
@@ -76,7 +90,7 @@ export function ParentDashboard({
   const [showAddChild, setShowAddChild] = useState(false);
   const [newName, setNewName] = useState('');
   const [newGrade, setNewGrade] = useState(5);
-  const [newSchool, setNewSchool] = useState('Nairobi Primary School');
+  const [newSchool, setNewSchool] = useState('');
 
   // Parent PIN Setup / Update state
   const [showCurrentPin, setShowCurrentPin] = useState(false);
@@ -85,7 +99,7 @@ export function ParentDashboard({
   const [pinSaveMsg, setPinSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // Per-child M-Pesa monthly licensing state (KES 30/child/mo)
-  const [payerPhone, setPayerPhone] = useState(parentContact || '0712 345 678');
+  const [payerPhone, setPayerPhone] = useState(parentContact || '');
   const [licenseBanner, setLicenseBanner] = useState('');
   const [licenseError, setLicenseError] = useState('');
   const [isPayingMpesa, setIsPayingMpesa] = useState(false);
@@ -347,6 +361,7 @@ export function ParentDashboard({
               <input
                 id="child-school"
                 type="text"
+                placeholder="e.g. Nairobi Primary School"
                 value={newSchool}
                 onChange={(e) => setNewSchool(e.target.value)}
                 className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
@@ -869,6 +884,45 @@ export function ParentDashboard({
             </button>
           </div>
         </div>
+
+        {(selectedChild.deviceMode === 'hand_off' || teacherAccount) && (
+          <div className="mt-5 rounded-2xl border border-teal-200 bg-teal-50/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-extrabold text-teal-950">
+                3-in-1 Single-Phone Mode (Parent + Teacher + Shared Child)
+              </p>
+              <button
+                type="button"
+                onClick={teacherAccount ? onOpenTeacherPortal : onOpenTeacherSetup}
+                className="rounded-xl bg-teal-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-teal-800"
+              >
+                {teacherAccount ? 'Open Teacher Portal →' : 'Link Teacher Profile →'}
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2.5 text-xs sm:grid-cols-3">
+              <div className="rounded-xl border border-teal-200/80 bg-white p-3">
+                <p className="font-bold text-slate-900">1. Parent Control</p>
+                <p className="mt-0.5 text-slate-600">
+                  {parentName || 'Parent'} · 4-digit PIN protects settings &amp; lock exit
+                </p>
+              </div>
+              <div className="rounded-xl border border-teal-200/80 bg-white p-3">
+                <p className="font-bold text-slate-900">2. Teacher Portal</p>
+                <p className="mt-0.5 text-slate-600">
+                  {teacherAccount
+                    ? `${teacherAccount.teacherCode} · ${teacherAccount.school} (Grade ${teacherAccount.grade})`
+                    : 'Not linked yet — link once to push class tasks on this same phone'}
+                </p>
+              </div>
+              <div className="rounded-xl border border-teal-200/80 bg-white p-3">
+                <p className="font-bold text-slate-900">3. Child Shared Hand-Off</p>
+                <p className="mt-0.5 text-slate-600">
+                  No second phone or pairing code needed — tap Activate Child Lock above to hand over
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Main Two-Column Controls & Analytics */}

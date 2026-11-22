@@ -38,7 +38,8 @@ import type {
   TeacherAssignment,
 } from '../types/somatime';
 
-const STORAGE_KEY = 'somatime_prototype_state_v2';
+const STORAGE_KEY = 'somatime_fresh_state_v3';
+const LEGACY_STORAGE_KEYS = ['somatime_prototype_state_v2', 'somatime_state_v1'];
 
 interface PersistedState {
   roleView: RoleView;
@@ -57,19 +58,19 @@ interface PersistedState {
 function getDefaultState(): PersistedState {
   return {
     roleView: 'parent',
-    selectedChildId: INITIAL_CHILDREN[0].id,
+    selectedChildId: '',
     handOffActive: false,
     parentAccount: {
-      name: 'Grace Wanjiku',
-      contact: '0712 345 678',
-      pin: PARENT_PIN,
-      registered: true,
+      name: '',
+      contact: '',
+      pin: '',
+      registered: false,
     },
     teacherAccount: null,
     registeredTeachers: [],
-    children: INITIAL_CHILDREN,
-    assignments: INITIAL_ASSIGNMENTS,
-    classRoster: INITIAL_CLASS_ROSTER,
+    children: [],
+    assignments: [],
+    classRoster: [],
     displayedKeysByChild: {},
     displayedQuizIdsByChild: {},
   };
@@ -77,29 +78,35 @@ function getDefaultState(): PersistedState {
 
 function loadState(): PersistedState {
   try {
+    LEGACY_STORAGE_KEYS.forEach((legacyKey) => {
+      try {
+        window.localStorage.removeItem(legacyKey);
+      } catch {
+        // Ignore storage errors
+      }
+    });
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return getDefaultState();
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
-    if (!parsed.children || !Array.isArray(parsed.children) || parsed.children.length === 0) {
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.children)) {
       return getDefaultState();
     }
     return {
       roleView: parsed.roleView ?? 'parent',
-      selectedChildId: parsed.selectedChildId ?? parsed.children[0].id,
+      selectedChildId: parsed.selectedChildId ?? parsed.children[0]?.id ?? '',
       handOffActive: Boolean(parsed.handOffActive),
       parentAccount: parsed.parentAccount ?? getDefaultState().parentAccount,
       teacherAccount: parsed.teacherAccount ?? null,
       registeredTeachers: Array.isArray(parsed.registeredTeachers) ? parsed.registeredTeachers : [],
       children: parsed.children.map((c) => ({
         ...c,
-        licenseActive: c.licenseActive ?? (c.id === 'brian'),
+        licenseActive: Boolean(c.licenseActive),
         licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
-        licenseExpiresAt:
-          c.licenseExpiresAt ?? (c.id === 'brian' ? buildLicenseExpiryIso(30) : null),
-        licensePaymentRef: c.licensePaymentRef ?? (c.id === 'brian' ? 'MPESA-SOMA8009' : null),
+        licenseExpiresAt: c.licenseExpiresAt ?? null,
+        licensePaymentRef: c.licensePaymentRef ?? null,
       })),
-      assignments: parsed.assignments ?? INITIAL_ASSIGNMENTS,
-      classRoster: parsed.classRoster ?? INITIAL_CLASS_ROSTER,
+      assignments: Array.isArray(parsed.assignments) ? parsed.assignments : [],
+      classRoster: Array.isArray(parsed.classRoster) ? parsed.classRoster : [],
       displayedKeysByChild: parsed.displayedKeysByChild ?? {},
       displayedQuizIdsByChild: parsed.displayedQuizIdsByChild ?? {},
     };
@@ -177,18 +184,23 @@ export function useSomaTimeStore() {
     }
   }, [state]);
 
-  const selectedChild = useMemo(
-    () => state.children.find((c) => c.id === state.selectedChildId) ?? state.children[0],
+  const selectedChild = useMemo<ChildProfile | null>(
+    () => state.children.find((c) => c.id === state.selectedChildId) ?? state.children[0] ?? null,
     [state.children, state.selectedChildId]
   );
 
-  const [cloudSyncOk, setCloudSyncOk] = useState(false);
-  const [cloudSyncMessage, setCloudSyncMessage] = useState('Syncing pairing codes to Cloud...');
+  const [cloudSyncOk, setCloudSyncOk] = useState(true);
+  const [cloudSyncMessage, setCloudSyncMessage] = useState('Fresh start ready · Register to sync');
 
-  // On initial mount in Parent mode, ensure existing local child pairing codes are published to Cloud Firestore
+  // On initial mount in Parent mode, sync registered child pairing codes to Cloud Firestore
   useEffect(() => {
     if (stateRef.current.roleView !== 'parent') return;
-    const pin = stateRef.current.parentAccount.pin;
+    if (stateRef.current.children.length === 0) {
+      setCloudSyncOk(true);
+      setCloudSyncMessage('Fresh start ready · Register parent & child to sync to Cloud');
+      return;
+    }
+    const pin = stateRef.current.parentAccount.pin || PARENT_PIN;
     Promise.all(
       stateRef.current.children.map((child) => publishPairingToCloud(child, pin))
     )
@@ -209,7 +221,7 @@ export function useSomaTimeStore() {
     if (!child) return;
     setCloudSyncMessage(`Syncing ${child.pairingCode} to Cloud...`);
     try {
-      await publishPairingToCloud(child, stateRef.current.parentAccount.pin);
+      await publishPairingToCloud(child, stateRef.current.parentAccount.pin || PARENT_PIN);
       setCloudSyncOk(true);
       setCloudSyncMessage(`Synced to Cloud ✓ · Code ${child.pairingCode} is active`);
     } catch {
@@ -758,6 +770,7 @@ export function useSomaTimeStore() {
         updatedTarget = {
           ...c,
           deviceMode: 'hand_off',
+          isPaired: false,
           backgroundGuardActive: true,
           isLocked: true,
           availableScreenSeconds: 0,
@@ -775,13 +788,17 @@ export function useSomaTimeStore() {
     return true;
   }, []);
 
-  const exitHandOffToParent = useCallback(() => {
+  const exitHandOffTo = useCallback((targetRole: RoleView = 'parent') => {
     setState((prev) => ({
       ...prev,
       handOffActive: false,
-      roleView: 'parent',
+      roleView: targetRole,
     }));
   }, []);
+
+  const exitHandOffToParent = useCallback(() => {
+    exitHandOffTo('parent');
+  }, [exitHandOffTo]);
 
   const simulateTimeExpired = useCallback((childId: string) => {
     let updatedTarget: ChildProfile | null = null;
@@ -1061,6 +1078,7 @@ export function useSomaTimeStore() {
       subjects: LearningArea[];
       grade: number;
       classStream: string;
+      preserveRoleView?: boolean;
     }): Promise<TeacherAccount> => {
       const code = generateTeacherCode();
       const cleanSchool = input.school.trim() || 'Nairobi Primary School';
@@ -1093,7 +1111,7 @@ export function useSomaTimeStore() {
 
       setState((prev) => ({
         ...prev,
-        roleView: 'teacher',
+        roleView: input.preserveRoleView ? prev.roleView : 'teacher',
         teacherAccount: saved,
         registeredTeachers: [
           saved,
@@ -1255,12 +1273,42 @@ export function useSomaTimeStore() {
     const fresh = getDefaultState();
     setState(fresh);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+      window.localStorage.removeItem(STORAGE_KEY);
+      LEGACY_STORAGE_KEYS.forEach((k) => window.localStorage.removeItem(k));
     } catch {
       // Ignore storage errors
     }
-    fresh.children.forEach((child) => {
-      void publishPairingToCloud(child, fresh.parentAccount.pin).catch(() => {});
+    setCloudSyncOk(true);
+    setCloudSyncMessage('All user data reset · Ready to register from scratch');
+  }, []);
+
+  const loadDemoData = useCallback(() => {
+    const demoState: PersistedState = {
+      roleView: 'parent',
+      selectedChildId: INITIAL_CHILDREN[0].id,
+      handOffActive: false,
+      parentAccount: {
+        name: 'Grace Wanjiku',
+        contact: '0712 345 678',
+        pin: PARENT_PIN,
+        registered: true,
+      },
+      teacherAccount: null,
+      registeredTeachers: [],
+      children: INITIAL_CHILDREN,
+      assignments: INITIAL_ASSIGNMENTS,
+      classRoster: INITIAL_CLASS_ROSTER,
+      displayedKeysByChild: {},
+      displayedQuizIdsByChild: {},
+    };
+    setState(demoState);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(demoState));
+    } catch {
+      // Ignore storage errors
+    }
+    demoState.children.forEach((child) => {
+      void publishPairingToCloud(child, demoState.parentAccount.pin).catch(() => {});
     });
   }, []);
 
@@ -1291,6 +1339,7 @@ export function useSomaTimeStore() {
     pairLearnerByCode,
     addChildProfile,
     activateHandOffMode,
+    exitHandOffTo,
     exitHandOffToParent,
     simulateTimeExpired,
     unlockWithParentPin,
@@ -1303,5 +1352,6 @@ export function useSomaTimeStore() {
     logoutTeacher,
     pushTeacherAssignment,
     resetDemoData,
+    loadDemoData,
   };
 }
