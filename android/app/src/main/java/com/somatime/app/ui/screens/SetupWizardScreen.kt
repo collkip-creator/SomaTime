@@ -23,6 +23,8 @@ import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -54,6 +56,8 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -126,7 +130,13 @@ fun SetupWizardScreen(
 
     var parentName by remember { mutableStateOf(uiState.parentName) }
     var parentContact by remember { mutableStateOf(uiState.parentContact) }
-    var parentPin by remember { mutableStateOf(uiState.parentPin) }
+    var parentPin by remember {
+        mutableStateOf(if (uiState.parentPin == CbcCurriculumRepository.PARENT_PIN) "" else uiState.parentPin)
+    }
+    var confirmParentPin by remember {
+        mutableStateOf(if (uiState.parentPin == CbcCurriculumRepository.PARENT_PIN) "" else uiState.parentPin)
+    }
+    var showParentPin by remember { mutableStateOf(false) }
     var childName by remember { mutableStateOf("") }
     var childGrade by remember { mutableIntStateOf(5) }
     var childSchool by remember { mutableStateOf("Nairobi Primary School") }
@@ -365,7 +375,27 @@ fun SetupWizardScreen(
                                 onValueChange = { input ->
                                     parentPin = input.filter { it.isDigit() }.take(4)
                                 },
-                                label = { Text("4-Digit Parent PIN") },
+                                label = { Text("Set Your Own 4-Digit Parent PIN") },
+                                visualTransformation = if (showParentPin) VisualTransformation.None else PasswordVisualTransformation(),
+                                trailingIcon = {
+                                    IconButton(onClick = { showParentPin = !showParentPin }) {
+                                        Icon(
+                                            if (showParentPin) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                            contentDescription = if (showParentPin) "Hide PIN" else "Show PIN"
+                                        )
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = confirmParentPin,
+                                onValueChange = { input ->
+                                    confirmParentPin = input.filter { it.isDigit() }.take(4)
+                                },
+                                label = { Text("Confirm 4-Digit Parent PIN") },
+                                visualTransformation = if (showParentPin) VisualTransformation.None else PasswordVisualTransformation(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
@@ -446,7 +476,11 @@ fun SetupWizardScreen(
                                             return@Button
                                         }
                                         if (parentPin.length != 4) {
-                                            formError = "Parent PIN must be exactly 4 digits."
+                                            formError = "Set your own 4-digit Parent PIN."
+                                            return@Button
+                                        }
+                                        if (parentPin != confirmParentPin) {
+                                            formError = "Parent PIN and Confirm PIN do not match."
                                             return@Button
                                         }
                                         formError = ""
@@ -463,7 +497,7 @@ fun SetupWizardScreen(
                                                 initialWatchMins
                                             )
                                             generatedChild = created
-                                            pairingInput = created.pairingCode
+                                            pairingInput = if (created.licenseActive) created.pairingCode else ""
                                             isSavingParent = false
                                             step = WizardStep.PARENT_DONE
                                         }
@@ -473,7 +507,7 @@ fun SetupWizardScreen(
                                     colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
                                 ) {
                                     Text(
-                                        if (isSavingParent) "Syncing to Cloud..." else "Complete & Generate Code"
+                                        if (isSavingParent) "Syncing to Cloud..." else "Save Parent Setup"
                                     )
                                 }
                             }
@@ -484,43 +518,54 @@ fun SetupWizardScreen(
 
             WizardStep.PARENT_DONE -> {
                 val created = generatedChild
+                val licensed = created?.licenseActive == true
                 item {
                     Card(
                         shape = RoundedCornerShape(22.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
-                        border = BorderStroke(1.dp, SomaEmerald)
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (licensed) Color(0xFFECFDF5) else Color(0xFFFFFBEB)
+                        ),
+                        border = BorderStroke(1.dp, if (licensed) SomaEmerald else SomaAmber)
                     ) {
                         Column(
                             modifier = Modifier.padding(20.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = SomaEmerald)
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                tint = if (licensed) SomaEmerald else SomaAmber
+                            )
                             Text(
-                                "Parent Account & Child Profile Ready!",
+                                "Parent Account & Child Profile Saved!",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                "Enter this Pairing Code on ${created?.name ?: "your child"}'s phone under \"Register as a Learner\":",
+                                if (licensed) {
+                                    "Enter this Pairing Code on ${created?.name ?: "your child"}'s phone under \"Register as a Learner\":"
+                                } else {
+                                    "Monthly Child License required (KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/child/mo) before generating ${created?.name ?: "your child"}'s pairing code or activating Child Lock."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFF334155)
                             )
                             Surface(
                                 shape = RoundedCornerShape(14.dp),
                                 color = Color.White,
-                                border = BorderStroke(1.dp, SomaEmerald)
+                                border = BorderStroke(1.dp, if (licensed) SomaEmerald else Color(0xFFFCD34D))
                             ) {
                                 Text(
-                                    text = created?.pairingCode ?: "SOMA-0000",
+                                    text = if (licensed) (created?.pairingCode ?: "SOMA-0000") else "SOMA-•••• (Locked)",
                                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
                                     style = MaterialTheme.typography.headlineMedium,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = SomaTeal
+                                    color = if (licensed) SomaTeal else Color(0xFF94A3B8)
                                 )
                             }
                             Text(
-                                "Parent PIN set to $parentPin",
+                                "Custom Parent PIN secured (••••)",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = Color(0xFF065F46)
                             )
@@ -538,18 +583,27 @@ fun SetupWizardScreen(
                                     Text("Retry Cloud Sync")
                                 }
                             }
-                            Button(
-                                onClick = { step = WizardStep.LEARNER_PAIR },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(containerColor = SomaBlue)
-                            ) {
-                                Text("Pair Learner Phone Now")
+                            if (licensed) {
+                                Button(
+                                    onClick = { step = WizardStep.LEARNER_PAIR },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = SomaBlue)
+                                ) {
+                                    Text("Pair Learner Phone Now")
+                                }
                             }
-                            OutlinedButton(
+                            Button(
                                 onClick = onDismiss,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
                             ) {
-                                Text("Go to Parent Dashboard")
+                                Text(
+                                    if (licensed) {
+                                        "Go to Parent Dashboard"
+                                    } else {
+                                        "Go to Parents Tab & Pay License (KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo) →"
+                                    }
+                                )
                             }
                         }
                     }
@@ -607,12 +661,22 @@ fun SetupWizardScreen(
                             ) {
                                 uiState.children.forEach { child ->
                                     FilterChip(
-                                        selected = pairingInput.trim() == child.pairingCode,
+                                        selected = child.licenseActive && pairingInput.trim() == child.pairingCode,
+                                        enabled = child.licenseActive,
                                         onClick = {
                                             pairingInput = child.pairingCode
                                             pairingFeedback = ""
                                         },
-                                        label = { Text("${child.name.split(" ").first()}: ${child.pairingCode}") }
+                                        label = {
+                                            val firstName = child.name.split(" ").first()
+                                            Text(
+                                                if (child.licenseActive) {
+                                                    "$firstName: ${child.pairingCode}"
+                                                } else {
+                                                    "Locked · $firstName (Pay License)"
+                                                }
+                                            )
+                                        }
                                     )
                                 }
                             }

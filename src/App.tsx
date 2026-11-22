@@ -41,7 +41,7 @@ export default function App() {
       return {
         open: true,
         title: 'Exit Child Lock Mode',
-        subtitle: `Enter Parent PIN (${store.parentAccount.pin}) to leave ${store.selectedChild.name}'s locked device mode.`,
+        subtitle: `Enter your 4-digit Parent PIN to leave ${store.selectedChild.name}'s locked device mode.`,
         confirmLabel: 'Exit Lock Mode',
       };
     }
@@ -49,7 +49,7 @@ export default function App() {
       return {
         open: true,
         title: 'Parent PIN Screen Unlock',
-        subtitle: `Enter Parent PIN (${store.parentAccount.pin}) to grant +15 mins of watch time to ${store.selectedChild.name}.`,
+        subtitle: `Enter your 4-digit Parent PIN to grant +15 mins of watch time to ${store.selectedChild.name}.`,
         confirmLabel: 'Unlock +15 Mins',
       };
     }
@@ -92,10 +92,14 @@ export default function App() {
           childrenList={store.children}
           selectedChild={store.selectedChild}
           parentPin={store.parentAccount.pin}
+          parentContact={store.parentAccount.contact}
           cloudSyncOk={store.cloudSyncOk}
           cloudSyncMessage={store.cloudSyncMessage}
           onRetryCloudSync={() => void store.retryCloudSyncNow()}
           onSelectChild={store.setSelectedChildId}
+          onUpdateParentPin={store.updateParentPin}
+          onActivateChildLicense={store.activateChildLicense}
+          onActivateAllUnpaidLicenses={store.activateAllUnpaidLicenses}
           onUpdateChild={store.updateChildSettings}
           onRegeneratePairingCode={store.regeneratePairingCode}
           onOpenLearnerPair={() => openSetup('learner')}
@@ -116,7 +120,6 @@ export default function App() {
           child={store.selectedChild}
           childrenList={store.children}
           handOffActive={store.handOffActive}
-          parentPin={store.parentAccount.pin}
           assignments={store.assignments}
           displayedKeys={store.displayedKeysByChild[store.selectedChild.id] ?? []}
           displayedQuizIds={store.displayedQuizIdsByChild[store.selectedChild.id] ?? []}

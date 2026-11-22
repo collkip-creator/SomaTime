@@ -2,16 +2,24 @@ import { useState } from 'react';
 import {
   CheckCircle2,
   Copy,
+  Eye,
+  EyeOff,
   GraduationCap,
   KeyRound,
   Link2,
+  Lock,
   LogIn,
   ShieldCheck,
   Smartphone,
   UserCheck,
   X,
 } from 'lucide-react';
-import { ALL_LEARNING_AREAS, getLevelGroupForGrade } from '../data/cbcCurriculum';
+import {
+  ALL_LEARNING_AREAS,
+  MONTHLY_LICENSE_KES,
+  PARENT_PIN,
+  getLevelGroupForGrade,
+} from '../data/cbcCurriculum';
 import type { ChildProfile, LearningArea, TeacherAccount } from '../types/somatime';
 
 export type SetupModalTab = 'choice' | 'parent' | 'learner' | 'teacher';
@@ -74,7 +82,13 @@ export function SetupOnboardingModal({
   // Parent registration state
   const [parentName, setParentName] = useState(defaultParentName);
   const [parentContact, setParentContact] = useState(defaultParentContact);
-  const [parentPin, setParentPin] = useState(defaultParentPin);
+  const [parentPin, setParentPin] = useState(
+    defaultParentPin === PARENT_PIN ? '' : defaultParentPin
+  );
+  const [confirmParentPin, setConfirmParentPin] = useState(
+    defaultParentPin === PARENT_PIN ? '' : defaultParentPin
+  );
+  const [showParentPin, setShowParentPin] = useState(false);
   const [childName, setChildName] = useState('');
   const [childGrade, setChildGrade] = useState(6);
   const [childSchool, setChildSchool] = useState('Nairobi Primary School');
@@ -112,7 +126,19 @@ export function SetupOnboardingModal({
 
   const handleParentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!childName.trim() || parentPin.trim().length !== 4 || isSavingParent) return;
+    if (isSavingParent) return;
+    if (!childName.trim()) {
+      setParentError("Please enter your child's full name.");
+      return;
+    }
+    if (parentPin.trim().length !== 4) {
+      setParentError('Please create your own 4-digit Parent PIN.');
+      return;
+    }
+    if (parentPin !== confirmParentPin) {
+      setParentError('Parent PIN and Confirm PIN do not match.');
+      return;
+    }
     setIsSavingParent(true);
     setParentError('');
     try {
@@ -127,11 +153,10 @@ export function SetupOnboardingModal({
         initialWatchMins,
       });
       setCreatedChild(child);
-      setPairingInput(child.pairingCode);
     } catch (err) {
       setParentError(
         err instanceof Error
-          ? 'Could not sync pairing code to cloud. Check your internet connection and retry.'
+          ? 'Could not sync profile to cloud. Check your internet connection and retry.'
           : 'Cloud sync failed. Please retry.'
       );
     } finally {
@@ -356,28 +381,63 @@ export function SetupOnboardingModal({
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
-                <label className="block text-xs font-semibold text-slate-700">4-Digit Parent PIN</label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Create Your 4-Digit Parent PIN
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowParentPin((v) => !v)}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-700 hover:text-teal-900"
+                  >
+                    {showParentPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    <span>{showParentPin ? 'Hide' : 'Show'}</span>
+                  </button>
+                </div>
                 <input
-                  type="text"
+                  type={showParentPin ? 'text' : 'password'}
+                  inputMode="numeric"
                   required
                   maxLength={4}
-                  pattern="\d{4}"
+                  placeholder="Enter 4 digits"
                   value={parentPin}
-                  onChange={(e) => setParentPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  onChange={(e) => {
+                    setParentPin(e.target.value.replace(/\D/g, '').slice(0, 4));
+                    setParentError('');
+                  }}
                   className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-sm font-bold text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700">Child Full Name</label>
+                <label className="block text-xs font-semibold text-slate-700">
+                  Confirm 4-Digit Parent PIN
+                </label>
                 <input
-                  type="text"
+                  type={showParentPin ? 'text' : 'password'}
+                  inputMode="numeric"
                   required
-                  placeholder="e.g. Faith Muthoni"
-                  value={childName}
-                  onChange={(e) => setChildName(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
+                  maxLength={4}
+                  placeholder="Re-enter PIN"
+                  value={confirmParentPin}
+                  onChange={(e) => {
+                    setConfirmParentPin(e.target.value.replace(/\D/g, '').slice(0, 4));
+                    setParentError('');
+                  }}
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-sm font-bold text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700">Child Full Name</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Faith Muthoni"
+                value={childName}
+                onChange={(e) => setChildName(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-900 focus:border-teal-600 focus:bg-white focus:outline-none"
+              />
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -466,52 +526,59 @@ export function SetupOnboardingModal({
           </form>
         )}
 
-        {/* Parent Pairing Code Generated Confirmation */}
+        {/* Parent Registration Confirmation */}
         {tab === 'parent' && createdChild && (
           <div className="mt-5 space-y-4">
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center">
               <CheckCircle2 className="mx-auto h-9 w-9 text-emerald-700" />
               <p className="mt-2 text-xs font-bold text-emerald-800">
-                Parent Account &amp; Child Profile Ready
+                Parent Account &amp; Custom PIN Saved
               </p>
               <h3 className="mt-1 font-display text-lg font-extrabold text-slate-900">
-                Pairing Code for {createdChild.name}
+                {createdChild.name} (Grade {createdChild.grade}) Added
               </h3>
-              <div className="mt-3 flex items-center justify-center gap-2">
-                <span className="rounded-xl border border-emerald-300 bg-white px-4 py-2 font-mono text-2xl font-extrabold tracking-wider text-slate-900">
-                  {createdChild.pairingCode}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyCode(createdChild.pairingCode)}
-                  className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100"
-                >
-                  <Copy className="h-4 w-4" />
-                  <span>{copied ? 'Copied' : 'Copy'}</span>
-                </button>
-              </div>
-              <p className="mt-3 text-xs text-slate-700">
-                Key this code into {createdChild.name.split(' ')[0]}&apos;s phone under{' '}
-                <strong>Register as a Learner</strong>. Once paired, the background watch-time guard
-                starts automatically.
-              </p>
+
+              {createdChild.licenseActive ? (
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <span className="rounded-xl border border-emerald-300 bg-white px-4 py-2 font-mono text-2xl font-extrabold tracking-wider text-slate-900">
+                    {createdChild.pairingCode}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyCode(createdChild.pairingCode)}
+                    className="flex min-h-[44px] items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100"
+                  >
+                    <Copy className="h-4 w-4" />
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                    <Lock className="h-4 w-4 shrink-0 text-amber-700" />
+                    <span>
+                      Pairing Code &amp; Child Lock Require M-Pesa License (KES {MONTHLY_LICENSE_KES}/mo)
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs text-slate-700">
+                    Pay {createdChild.name.split(' ')[0]}&apos;s monthly M-Pesa license in the{' '}
+                    <strong>Parents Tab → Licensing Area</strong> to reveal and activate the pairing
+                    code or enable &ldquo;Activate Child Lock &amp; Hand Over Phone&rdquo;.
+                  </p>
+                </div>
+              )}
             </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={onClose}
-                className="min-h-[44px] rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Stay in Parent Dashboard
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('learner')}
-                className="flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700"
+                className="flex min-h-[46px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-teal-800"
               >
                 <Smartphone className="h-4 w-4" />
-                <span>Test Child Phone Pairing Now →</span>
+                <span>
+                  Go to Parents Tab &amp; Pay via M-Pesa (KES {MONTHLY_LICENSE_KES}/mo) →
+                </span>
               </button>
             </div>
           </div>
@@ -534,7 +601,7 @@ export function SetupOnboardingModal({
                 id="learner-code-input"
                 type="text"
                 required
-                placeholder="e.g. SOMA-4012"
+                placeholder="e.g. SOMA-8009"
                 value={pairingInput}
                 onChange={(e) => {
                   setPairingInput(e.target.value.toUpperCase());
@@ -544,23 +611,30 @@ export function SetupOnboardingModal({
               />
             </div>
 
-            {/* Quick-fill helper for existing demo codes */}
+            {/* Quick-fill helper for licensed active codes */}
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
               <p className="text-[11px] font-semibold text-slate-600">
-                Active Parent Codes Available to Test:
+                Licensed Parent Codes Ready to Pair:
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {childrenList.map((c) => (
                   <button
                     key={c.id}
                     type="button"
+                    disabled={!c.licenseActive}
                     onClick={() => {
                       setPairingInput(c.pairingCode);
                       setPairingError('');
                     }}
-                    className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs font-bold text-slate-800 hover:border-emerald-600"
+                    className={`rounded-xl border px-2.5 py-1.5 font-mono text-xs font-bold ${
+                      c.licenseActive
+                        ? 'border-slate-200 bg-white text-slate-800 hover:border-emerald-600'
+                        : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                    }`}
                   >
-                    {c.pairingCode} · {c.name.split(' ')[0]}
+                    {c.licenseActive
+                      ? `${c.pairingCode} · ${c.name.split(' ')[0]}`
+                      : `Locked · ${c.name.split(' ')[0]} (Pay License)`}
                   </button>
                 ))}
               </div>

@@ -454,6 +454,13 @@ private fun SomaTimeRoot(
                         },
                         onDeclineApproval = { childId, approvalId ->
                             store.resolveApproval(childId, approvalId, approved = false)
+                        },
+                        onUpdateParentPin = store::updateParentPin,
+                        onActivateChildLicense = { childId, phone ->
+                            store.activateChildLicense(childId, phone)
+                        },
+                        onActivateAllUnpaidLicenses = { phone ->
+                            store.activateAllUnpaidLicenses(phone)
                         }
                     )
 
@@ -483,7 +490,7 @@ private fun SomaTimeRoot(
     when (val intent = pinIntent) {
         is PinIntent.ExitHandOff -> PinDialog(
             title = "Exit Protected Child Mode",
-            subtitle = "Enter Parent PIN (${uiState.parentPin}) to exit ${uiState.selectedChild.name}'s locked mode.",
+            subtitle = "Enter Parent PIN to exit ${uiState.selectedChild.name}'s locked mode.",
             expectedPin = uiState.parentPin,
             confirmLabel = "Exit to Parent",
             onSuccess = {
@@ -495,7 +502,7 @@ private fun SomaTimeRoot(
 
         PinIntent.UnlockChild -> PinDialog(
             title = "Parent PIN Screen Unlock",
-            subtitle = "Enter Parent PIN (${uiState.parentPin}) to grant +15 mins to ${uiState.selectedChild.name}.",
+            subtitle = "Enter Parent PIN to grant +15 mins to ${uiState.selectedChild.name}.",
             expectedPin = uiState.parentPin,
             confirmLabel = "Unlock +15m",
             onSuccess = {

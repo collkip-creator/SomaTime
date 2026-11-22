@@ -21,6 +21,7 @@ import {
   ASSETS,
   CBC_DIRECTORY_CATALOG,
   CBC_LESSONS,
+  buildLessonFromTeacherAssignment,
   getCatalogTrackingKey,
   getLevelGroupForGrade,
   getQuestionCountForGrade,
@@ -44,7 +45,6 @@ interface ChildModeProps {
   child: ChildProfile;
   childrenList: ChildProfile[];
   handOffActive: boolean;
-  parentPin: string;
   assignments: TeacherAssignment[];
   displayedKeys: string[];
   displayedQuizIds: string[];
@@ -83,7 +83,6 @@ export function ChildMode({
   child,
   childrenList,
   handOffActive,
-  parentPin,
   assignments,
   displayedKeys,
   displayedQuizIds,
@@ -219,9 +218,11 @@ export function ChildMode({
           false
         );
       }
-      const scaledLesson = scaleLessonQuestionsForGrade(lesson, learnerGrade);
+      const finalLesson = lesson.isCustom
+        ? lesson
+        : scaleLessonQuestionsForGrade(lesson, learnerGrade);
       setActiveIsPriority(isPriority);
-      setActiveLesson(scaledLesson);
+      setActiveLesson(finalLesson);
     },
     [
       child.id,
@@ -308,7 +309,7 @@ export function ChildMode({
 
   const handleTapEntertainmentApp = (appName: string) => {
     if (isPhoneLocked) {
-      setLockNotice(`${appName} is locked. Complete a 5-min CBC activity or enter Parent PIN (${parentPin}).`);
+      setLockNotice(`${appName} is locked. Complete a 5-min CBC activity or ask a parent to enter their PIN.`);
       return;
     }
     onSelectActiveApp(child.id, appName);
@@ -341,9 +342,9 @@ export function ChildMode({
             </div>
             <p className="text-xs text-slate-600">
               {child.isPaired
-                ? `Paired (${child.pairingCode}) · Background watch-minute guard active · Parent PIN ${parentPin} to interrupt`
+                ? `Paired (${child.pairingCode}) · Background watch-minute guard active · Parent PIN required to interrupt`
                 : handOffActive
-                  ? `Hand-Off Mode active on Parent Phone · PIN ${parentPin} required to exit`
+                  ? 'Hand-Off Mode active on Parent Phone · Parent PIN required to exit'
                   : `${child.school} · Not paired yet (Code: ${child.pairingCode})`}
             </p>
           </div>
@@ -601,7 +602,7 @@ export function ChildMode({
                         className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl border border-white/25 bg-white/10 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-white/20"
                       >
                         <KeyRound className="h-3.5 w-3.5" />
-                        <span>Unlock with Parent PIN ({parentPin})</span>
+                        <span>Unlock with Parent PIN</span>
                       </button>
                     </div>
                   </div>
@@ -656,20 +657,11 @@ export function ChildMode({
                   type="button"
                   onClick={() => {
                     const assign = priorityAssignments[0];
-                    const target =
-                      CBC_LESSONS.find((l) => l.id === assign.lessonId) ?? CBC_LESSONS[0];
-                    launchLesson(
-                      {
-                        ...target,
-                        title: assign.title || target.title,
-                        grade: assign.grade,
-                        learningArea: assign.learningArea,
-                        strand: assign.strand,
-                        subStrand: assign.subStrand,
-                      },
-                      true,
-                      { key: `assign:${assign.id}`, quizId: target.id }
-                    );
+                    const built = buildLessonFromTeacherAssignment(assign, learnerGrade);
+                    launchLesson(built, true, {
+                      key: `assign:${assign.id}`,
+                      quizId: assign.lessonId,
+                    });
                   }}
                   className="flex min-h-[46px] shrink-0 items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white hover:bg-slate-800 whitespace-nowrap"
                 >

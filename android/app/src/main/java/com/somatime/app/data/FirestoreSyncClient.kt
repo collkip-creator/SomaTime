@@ -3,6 +3,8 @@ package com.somatime.app.data
 import com.somatime.app.model.ChildProfile
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
+import com.somatime.app.model.QuestionType
+import com.somatime.app.model.QuizQuestion
 import com.somatime.app.model.TeacherAccount
 import com.somatime.app.model.TeacherAssignment
 import java.io.BufferedReader
@@ -39,7 +41,10 @@ data class CloudPairingData(
     val isLocked: Boolean,
     val isPaired: Boolean,
     val ownerUid: String,
-    val completedLessonIds: List<String>
+    val completedLessonIds: List<String>,
+    val licenseActive: Boolean = false,
+    val licenseExpiresAt: String = "",
+    val licensePaymentRef: String = ""
 )
 
 data class CloudOpResult<T>(
@@ -135,7 +140,8 @@ object FirestoreSyncClient {
                     "childName", "grade", "school", "classStream", "deviceMode",
                     "parentPin", "dailyCapMins", "exchangeRateMins", "mandatorySubjects",
                     "requireParentApproval", "availableScreenSeconds", "usedScreenTodayMins",
-                    "learnedMinutesToday", "isLocked", "isPaired", "completedLessonIds", "updatedAt"
+                    "learnedMinutesToday", "isLocked", "isPaired", "completedLessonIds",
+                    "licenseActive", "licenseExpiresAt", "licensePaymentRef", "updatedAt"
                 )
                 val maskParams = updateFields.joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
                 val url = "$BASE_URL/pairings/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
@@ -169,6 +175,13 @@ object FirestoreSyncClient {
                     ok = false,
                     httpCode = fetched.httpCode,
                     errorMessage = fetched.errorMessage
+                )
+            }
+            if (!fetched.data.licenseActive) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = 402,
+                    errorMessage = "Monthly child license (KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo) is not active for ${fetched.data.childName}. Ask a parent to activate it via M-Pesa in the Parents tab first."
                 )
             }
 
@@ -275,6 +288,9 @@ object FirestoreSyncClient {
         val isPaired = readBool(fields, "isPaired", false)
         val ownerUid = readStr(fields, "ownerUid", "device_parent")
         val completedLessonIds = readStrArray(fields, "completedLessonIds")
+        val licenseActive = readBool(fields, "licenseActive", false)
+        val licenseExpiresAt = readStr(fields, "licenseExpiresAt", "")
+        val licensePaymentRef = readStr(fields, "licensePaymentRef", "")
 
         return CloudOpResult(
             ok = true,
@@ -298,7 +314,10 @@ object FirestoreSyncClient {
                 isLocked = isLocked,
                 isPaired = isPaired,
                 ownerUid = ownerUid,
-                completedLessonIds = completedLessonIds
+                completedLessonIds = completedLessonIds,
+                licenseActive = licenseActive,
+                licenseExpiresAt = licenseExpiresAt,
+                licensePaymentRef = licensePaymentRef
             )
         )
     }
@@ -337,6 +356,9 @@ object FirestoreSyncClient {
         obj.put("isLocked", boolVal(child.isLocked))
         obj.put("isPaired", boolVal(child.isPaired))
         obj.put("completedLessonIds", strArrayVal(child.completedLessonIds.take(50)))
+        obj.put("licenseActive", boolVal(child.licenseActive))
+        obj.put("licenseExpiresAt", strVal((child.licenseExpiresAt ?: "").take(64)))
+        obj.put("licensePaymentRef", strVal((child.licensePaymentRef ?: "").take(64)))
         obj.put("updatedAt", strVal(nowIso()))
         return obj
     }
@@ -605,6 +627,22 @@ object FirestoreSyncClient {
             .put("subStrand", strVal(assignment.subStrand.take(120)))
             .put("lessonId", strVal(assignment.lessonId.take(80)))
             .put("title", strVal(assignment.title.take(140)))
+            .put("isCustom", boolVal(assignment.isCustom))
+            .put("instructions", strVal(assignment.instructions.trim().take(600)))
+            .put("attachmentName", strVal(assignment.attachmentName.trim().take(120)))
+            .put(
+                "attachmentUrl",
+                strVal(
+                    if (AssignmentUploadParser.isSafeAttachmentUrl(assignment.attachmentUrl)) {
+                        assignment.attachmentUrl.trim().take(300)
+                    } else {
+                        ""
+                    }
+                )
+            )
+            .put("attachmentMimeType", strVal(assignment.attachmentMimeType.trim().take(100)))
+            .put("attachmentSizeBytes", intVal(assignment.attachmentSizeBytes.coerceIn(0L, 10_000_000L).toInt()))
+            .put("customQuestions", encodeCustomQuestionsArray(assignment.customQuestions))
             .put("teacherName", strVal(assignment.teacherName.ifEmpty { "Class Teacher" }.take(80)))
             .put("teacherCode", strVal(assignment.teacherCode.ifEmpty { "TCH-0000" }.take(24)))
             .put("dueLabel", strVal(assignment.dueLabel.take(80)))
@@ -690,6 +728,9 @@ object FirestoreSyncClient {
                 val areaLabel = readStr(f, "learningArea", "Mathematics")
                 val area = LearningArea.entries.firstOrNull { it.displayName == areaLabel }
                     ?: LearningArea.MATHEMATICS
+                val rawUrl = readStr(f, "attachmentUrl", "")
+                val safeUrl = if (AssignmentUploadParser.isSafeAttachmentUrl(rawUrl)) rawUrl else ""
+                val customQs = decodeCustomQuestionsArray(f)
                 add(
                     TeacherAssignment(
                         id = readStr(f, "id", "assign-$i"),
@@ -701,6 +742,13 @@ object FirestoreSyncClient {
                         subStrand = readStr(f, "subStrand", "Core Strand"),
                         lessonId = readStr(f, "lessonId", "g4-math-fractions"),
                         title = readStr(f, "title", "Teacher Priority Assignment"),
+                        isCustom = readBool(f, "isCustom", false) || customQs.isNotEmpty(),
+                        instructions = readStr(f, "instructions", ""),
+                        attachmentName = readStr(f, "attachmentName", ""),
+                        attachmentUrl = safeUrl,
+                        attachmentMimeType = readStr(f, "attachmentMimeType", ""),
+                        attachmentSizeBytes = readInt(f, "attachmentSizeBytes", 0).toLong(),
+                        customQuestions = customQs,
                         teacherName = readStr(f, "teacherName", "Class Teacher"),
                         teacherCode = readStr(f, "teacherCode", ""),
                         dueLabel = readStr(f, "dueLabel", "Priority · Complete First"),
@@ -711,6 +759,64 @@ object FirestoreSyncClient {
             }
         }
         CloudOpResult(ok = true, data = list, httpCode = res.code)
+    }
+
+    private fun encodeCustomQuestionsArray(questions: List<QuizQuestion>): JSONObject {
+        val arr = JSONArray()
+        questions.take(15).forEachIndexed { idx, q ->
+            val typeStr = if (q.type == QuestionType.FILL_BLANK) "fill_blank" else "multiple_choice"
+            val qFields = JSONObject()
+                .put("id", strVal(q.id.ifBlank { "tq-${idx + 1}" }.take(64)))
+                .put("type", strVal(typeStr))
+                .put("prompt", strVal(q.prompt.trim().take(320)))
+                .put("bilingualHint", strVal(q.hint.ifBlank { "Read carefully before checking." }.take(220)))
+                .put("options", strArrayVal(q.options.map { it.trim().take(120) }.filter { it.isNotEmpty() }.take(4)))
+                .put("correctAnswer", strVal(q.correctAnswer.trim().take(140)))
+                .put("acceptableAnswers", strArrayVal(q.acceptableAnswers.map { it.trim().take(140) }.filter { it.isNotEmpty() }.take(6)))
+                .put("blankPrefix", strVal(q.blankPrefix.take(40)))
+                .put("blankSuffix", strVal(q.blankSuffix.take(40)))
+                .put("explanation", strVal(q.explanation.trim().take(260)))
+            arr.put(JSONObject().put("mapValue", JSONObject().put("fields", qFields)))
+        }
+        val inner = JSONObject()
+        if (arr.length() > 0) inner.put("values", arr)
+        return JSONObject().put("arrayValue", inner)
+    }
+
+    private fun decodeCustomQuestionsArray(parentFields: JSONObject): List<QuizQuestion> {
+        val values = parentFields.optJSONObject("customQuestions")
+            ?.optJSONObject("arrayValue")
+            ?.optJSONArray("values") ?: return emptyList()
+        return buildList {
+            for (i in 0 until minOf(values.length(), 15)) {
+                val f = values.optJSONObject(i)
+                    ?.optJSONObject("mapValue")
+                    ?.optJSONObject("fields") ?: continue
+                val prompt = readStr(f, "prompt", "")
+                val correct = readStr(f, "correctAnswer", "")
+                if (prompt.isEmpty() || correct.isEmpty()) continue
+                val typeStr = readStr(f, "type", "multiple_choice")
+                val qType = if (typeStr == "fill_blank") QuestionType.FILL_BLANK else QuestionType.MULTIPLE_CHOICE
+                val opts = readStrArray(f, "options")
+                val acceptable = readStrArray(f, "acceptableAnswers").ifEmpty {
+                    listOf(correct.lowercase(Locale.US))
+                }
+                add(
+                    QuizQuestion(
+                        id = readStr(f, "id", "tq-${i + 1}"),
+                        type = qType,
+                        prompt = prompt,
+                        hint = readStr(f, "bilingualHint", "Read carefully before checking."),
+                        options = opts,
+                        correctAnswer = correct,
+                        acceptableAnswers = acceptable,
+                        blankPrefix = readStr(f, "blankPrefix", ""),
+                        blankSuffix = readStr(f, "blankSuffix", ""),
+                        explanation = readStr(f, "explanation", "Correct answer: $correct")
+                    )
+                )
+            }
+        }
     }
 
     private fun enc(v: String): String = URLEncoder.encode(v, "UTF-8")

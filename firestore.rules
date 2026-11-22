@@ -73,7 +73,8 @@ service cloud.firestore {
           'deviceMode', 'parentPin', 'dailyCapMins', 'exchangeRateMins',
           'mandatorySubjects', 'requireParentApproval', 'availableScreenSeconds',
           'usedScreenTodayMins', 'learnedMinutesToday', 'isLocked', 'isPaired',
-          'ownerUid', 'completedLessonIds', 'updatedAt'
+          'ownerUid', 'completedLessonIds', 'licenseActive', 'licenseExpiresAt',
+          'licensePaymentRef', 'updatedAt'
         ])
         && isValidPairingCodeId(data.pairingCode)
         && isValidId(data.childId)
@@ -96,6 +97,9 @@ service cloud.firestore {
         && isValidId(data.ownerUid)
         && data.completedLessonIds is list && data.completedLessonIds.size() <= 50
         && (data.completedLessonIds.size() == 0 || data.completedLessonIds[0] is string)
+        && (!('licenseActive' in data) || data.licenseActive is bool)
+        && (!('licenseExpiresAt' in data) || (data.licenseExpiresAt is string && data.licenseExpiresAt.size() <= 64))
+        && (!('licensePaymentRef' in data) || (data.licensePaymentRef is string && data.licensePaymentRef.size() <= 64))
         && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
@@ -130,6 +134,9 @@ service cloud.firestore {
         'isLocked',
         'isPaired',
         'completedLessonIds',
+        'licenseActive',
+        'licenseExpiresAt',
+        'licensePaymentRef',
         'updatedAt'
       ]);
     }

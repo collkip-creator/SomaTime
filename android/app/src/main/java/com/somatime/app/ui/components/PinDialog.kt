@@ -58,7 +58,7 @@ fun PinDialog(
             if (next == expectedPin) {
                 onSuccess()
             } else {
-                error = "Incorrect Parent PIN. Active PIN is $expectedPin."
+                error = "Incorrect Parent PIN. Please try again."
                 pin = ""
             }
         }
@@ -110,7 +110,7 @@ fun PinDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Active Parent PIN: $expectedPin",
+                    text = "Enter your 4-digit Parent PIN",
                     style = MaterialTheme.typography.labelMedium,
                     color = Color(0xFF64748B),
                     textAlign = TextAlign.Center
@@ -199,7 +199,7 @@ fun PinDialog(
                     if (pin == expectedPin) {
                         onSuccess()
                     } else {
-                        error = "Incorrect Parent PIN. Active PIN is $expectedPin."
+                        error = "Incorrect Parent PIN. Please try again."
                         pin = ""
                     }
                 },

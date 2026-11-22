@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import type {
+  ActivityQuestion,
   ChildProfile,
   DeviceMode,
   LearningArea,
@@ -113,6 +114,9 @@ export interface CloudPairingDoc {
   isPaired: boolean;
   ownerUid: string;
   completedLessonIds: string[];
+  licenseActive?: boolean;
+  licenseExpiresAt?: string;
+  licensePaymentRef?: string;
   updatedAt: string;
 }
 
@@ -181,6 +185,9 @@ function buildPairingPayload(
     isPaired: Boolean(child.isPaired),
     ownerUid: sanitizeId(ownerUid, 'device_parent'),
     completedLessonIds: (child.completedLessonIds || []).slice(0, 50),
+    licenseActive: Boolean(child.licenseActive),
+    licenseExpiresAt: (child.licenseExpiresAt || '').slice(0, 64),
+    licensePaymentRef: (child.licensePaymentRef || '').slice(0, 64),
     updatedAt: new Date().toISOString().slice(0, 64),
   };
 }
@@ -219,6 +226,9 @@ export async function publishPairingToCloud(
         isLocked: payload.isLocked,
         isPaired: payload.isPaired,
         completedLessonIds: payload.completedLessonIds,
+        licenseActive: payload.licenseActive,
+        licenseExpiresAt: payload.licenseExpiresAt,
+        licensePaymentRef: payload.licensePaymentRef,
         updatedAt: payload.updatedAt,
       });
     }
@@ -246,6 +256,10 @@ export async function fetchAndPairFromCloud(
 
   if (!snap.exists()) return null;
   const data = snap.data() as CloudPairingDoc;
+
+  if (!data.licenseActive) {
+    return data;
+  }
 
   try {
     await updateDoc(docRef, {
@@ -522,6 +536,32 @@ export async function loginTeacherFromCloud(
   };
 }
 
+function sanitizeCustomQuestions(rawList?: ActivityQuestion[]): Array<Record<string, unknown>> {
+  if (!Array.isArray(rawList) || rawList.length === 0) return [];
+  return rawList.slice(0, 15).map((q, idx) => ({
+    id: (q.id || `tq-${idx + 1}`).slice(0, 64),
+    type: q.type === 'fill_blank' ? 'fill_blank' : 'multiple_choice',
+    prompt: (q.prompt || '').trim().slice(0, 320),
+    bilingualHint: (q.bilingualHint || 'Read carefully before checking.').trim().slice(0, 220),
+    options: Array.isArray(q.options)
+      ? q.options.map((o) => String(o).trim().slice(0, 120)).filter(Boolean).slice(0, 4)
+      : [],
+    correctAnswer: (q.correctAnswer || '').trim().slice(0, 140),
+    acceptableAnswers: Array.isArray(q.acceptableAnswers)
+      ? q.acceptableAnswers.map((a) => String(a).trim().slice(0, 140)).filter(Boolean).slice(0, 6)
+      : [],
+    blankPrefix: (q.blankPrefix || '').slice(0, 40),
+    blankSuffix: (q.blankSuffix || '').slice(0, 40),
+    explanation: (q.explanation || '').trim().slice(0, 260),
+  }));
+}
+
+function isSafeCloudAttachmentUrl(url?: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return trimmed.startsWith('/api/assignments/files/') || trimmed.startsWith('https://');
+}
+
 export async function publishSchoolGradeAssignmentToCloud(
   assignment: TeacherAssignment,
   schoolName: string
@@ -535,7 +575,7 @@ export async function publishSchoolGradeAssignmentToCloud(
   const path = `school_assignments/${schoolGradeKey}`;
   const docRef = doc(db, 'school_assignments', schoolGradeKey);
 
-  const cloudItem = {
+  const cloudItem: Record<string, unknown> = {
     id: assignment.id.slice(0, 80),
     classStream: assignment.classStream.slice(0, 120),
     school: safeSchool,
@@ -545,6 +585,15 @@ export async function publishSchoolGradeAssignmentToCloud(
     subStrand: assignment.subStrand.slice(0, 120),
     lessonId: assignment.lessonId.slice(0, 80),
     title: assignment.title.slice(0, 140),
+    isCustom: Boolean(assignment.isCustom),
+    instructions: (assignment.instructions || '').trim().slice(0, 600),
+    attachmentName: (assignment.attachmentName || '').trim().slice(0, 120),
+    attachmentUrl: isSafeCloudAttachmentUrl(assignment.attachmentUrl)
+      ? assignment.attachmentUrl!.trim().slice(0, 300)
+      : '',
+    attachmentMimeType: (assignment.attachmentMimeType || '').trim().slice(0, 100),
+    attachmentSizeBytes: clampInt(assignment.attachmentSizeBytes || 0, 0, 10_000_000),
+    customQuestions: sanitizeCustomQuestions(assignment.customQuestions),
     teacherName: (assignment.teacherName || 'Teacher').slice(0, 80),
     teacherCode: (assignment.teacherCode || 'TCH-0000').slice(0, 24),
     dueLabel: assignment.dueLabel.slice(0, 80),
@@ -599,22 +648,52 @@ export function subscribeSchoolGradeAssignments(
       if (!snapshot.exists()) return;
       const rawList =
         (snapshot.data().recentAssignments as Array<Record<string, unknown>>) || [];
-      const mapped: TeacherAssignment[] = rawList.map((item) => ({
-        id: String(item.id || `assign-${Date.now()}`),
-        classStream: String(item.classStream || `Grade ${grade} East`),
-        school: String(item.school || school),
-        grade: Number(item.grade || grade),
-        learningArea: String(item.learningArea || 'Mathematics') as LearningArea,
-        strand: String(item.strand || 'Numbers'),
-        subStrand: String(item.subStrand || 'Core Strand'),
-        lessonId: String(item.lessonId || 'g4-math-fractions'),
-        title: String(item.title || 'Teacher Priority Assignment'),
-        teacherName: item.teacherName ? String(item.teacherName) : undefined,
-        teacherCode: item.teacherCode ? String(item.teacherCode) : undefined,
-        dueLabel: String(item.dueLabel || 'Priority · Before Screen Time'),
-        pushedAt: String(item.pushedAt || 'Today'),
-        completedByChildIds: [],
-      }));
+      const mapped: TeacherAssignment[] = rawList.map((item) => {
+        const rawQuestions = Array.isArray(item.customQuestions) ? item.customQuestions : [];
+        const customQuestions: ActivityQuestion[] = rawQuestions
+          .filter((q): q is Record<string, unknown> => Boolean(q && typeof q === 'object'))
+          .map((q, idx) => ({
+            id: String(q.id || `tq-${idx + 1}`),
+            type: (q.type === 'fill_blank' ? 'fill_blank' : 'multiple_choice') as ActivityQuestion['type'],
+            prompt: String(q.prompt || ''),
+            bilingualHint: String(q.bilingualHint || 'Read carefully before answering.'),
+            options: Array.isArray(q.options) ? q.options.map((o) => String(o)) : undefined,
+            correctAnswer: q.correctAnswer ? String(q.correctAnswer) : undefined,
+            acceptableAnswers: Array.isArray(q.acceptableAnswers)
+              ? q.acceptableAnswers.map((a) => String(a))
+              : undefined,
+            blankPrefix: q.blankPrefix ? String(q.blankPrefix) : undefined,
+            blankSuffix: q.blankSuffix ? String(q.blankSuffix) : undefined,
+            explanation: String(q.explanation || 'Well done!'),
+          }))
+          .filter((q) => q.prompt.length > 0);
+
+        const rawUrl = item.attachmentUrl ? String(item.attachmentUrl) : '';
+        return {
+          id: String(item.id || `assign-${Date.now()}`),
+          classStream: String(item.classStream || `Grade ${grade} East`),
+          school: String(item.school || school),
+          grade: Number(item.grade || grade),
+          learningArea: String(item.learningArea || 'Mathematics') as LearningArea,
+          strand: String(item.strand || 'Numbers'),
+          subStrand: String(item.subStrand || 'Core Strand'),
+          lessonId: String(item.lessonId || 'g4-math-fractions'),
+          title: String(item.title || 'Teacher Priority Assignment'),
+          isCustom: Boolean(item.isCustom) || customQuestions.length > 0,
+          instructions: item.instructions ? String(item.instructions) : undefined,
+          attachmentName: item.attachmentName ? String(item.attachmentName) : undefined,
+          attachmentUrl: isSafeCloudAttachmentUrl(rawUrl) ? rawUrl : undefined,
+          attachmentMimeType: item.attachmentMimeType ? String(item.attachmentMimeType) : undefined,
+          attachmentSizeBytes:
+            typeof item.attachmentSizeBytes === 'number' ? item.attachmentSizeBytes : undefined,
+          customQuestions: customQuestions.length > 0 ? customQuestions : undefined,
+          teacherName: item.teacherName ? String(item.teacherName) : undefined,
+          teacherCode: item.teacherCode ? String(item.teacherCode) : undefined,
+          dueLabel: String(item.dueLabel || 'Priority · Before Screen Time'),
+          pushedAt: String(item.pushedAt || 'Today'),
+          completedByChildIds: [],
+        };
+      });
       onData(mapped);
     },
     (error) => {

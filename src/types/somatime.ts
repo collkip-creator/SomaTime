@@ -115,6 +115,10 @@ export interface ChildProfile {
   activityLogs: ChildActivityLog[];
   rubricByArea: Partial<Record<LearningArea, CBCRubric>>;
   streakDays: number;
+  licenseActive: boolean;
+  licensePlanLabel: string;
+  licenseExpiresAt: string | null;
+  licensePaymentRef: string | null;
 }
 
 export interface MatchingPair {
@@ -145,6 +149,8 @@ export interface ActivityQuestion {
 
 export interface CBCLesson {
   id: string;
+  assignmentId?: string;
+  isCustom?: boolean;
   title: string;
   swahiliTitle: string;
   grade: number;
@@ -155,6 +161,11 @@ export interface CBCLesson {
   subStrand: string;
   durationMins: number;
   summary: string;
+  instructions?: string;
+  attachmentName?: string;
+  attachmentUrl?: string;
+  attachmentMimeType?: string;
+  attachmentSizeBytes?: number;
   questions: ActivityQuestion[];
 }
 
@@ -180,6 +191,13 @@ export interface TeacherAssignment {
   subStrand: string;
   lessonId: string;
   title: string;
+  isCustom?: boolean;
+  instructions?: string;
+  attachmentName?: string;
+  attachmentUrl?: string;
+  attachmentMimeType?: string;
+  attachmentSizeBytes?: number;
+  customQuestions?: ActivityQuestion[];
   teacherName?: string;
   teacherCode?: string;
   dueLabel: string;

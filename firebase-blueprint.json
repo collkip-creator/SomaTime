@@ -141,6 +141,18 @@
         "completedLessonIds": {
           "type": "array"
         },
+        "licenseActive": {
+          "type": "boolean",
+          "description": "Whether the monthly per-child SomaTime license is active"
+        },
+        "licenseExpiresAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "licensePaymentRef": {
+          "type": "string",
+          "maxLength": 64
+        },
         "updatedAt": {
           "type": "string",
           "maxLength": 64
@@ -237,7 +249,7 @@
     },
     "SchoolGradeAssignments": {
       "title": "SchoolGradeAssignments",
-      "description": "Priority CBC subject and strand assignments pushed by teachers for a specific school and grade.",
+      "description": "Priority CBC subject, custom question, and uploaded worksheet assignments pushed by teachers for a specific school and grade.",
       "type": "object",
       "properties": {
         "schoolGradeKey": {
@@ -257,7 +269,7 @@
         },
         "recentAssignments": {
           "type": "array",
-          "description": "Up to 12 priority assignments for learners in this school and grade"
+          "description": "Up to 12 priority or custom assignments (including bounded instructions, attachment metadata/URL, and up to 15 custom questions) for learners in this school and grade"
         },
         "updatedAt": {
           "type": "string",

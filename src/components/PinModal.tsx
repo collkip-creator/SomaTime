@@ -42,7 +42,7 @@ export function PinModal({
       if (next === expectedPin) {
         onSuccess();
       } else {
-        setError(`Incorrect Parent PIN. Active PIN is ${expectedPin}.`);
+        setError('Incorrect Parent PIN. Please try again.');
         window.setTimeout(() => setPin(''), 350);
       }
     }
@@ -58,7 +58,7 @@ export function PinModal({
     if (pin === expectedPin) {
       onSuccess();
     } else {
-      setError(`Incorrect Parent PIN. Active PIN is ${expectedPin}.`);
+      setError('Incorrect Parent PIN. Please try again.');
       setPin('');
     }
   };
@@ -113,7 +113,7 @@ export function PinModal({
           </div>
 
           <p className="mt-2.5 text-center text-xs text-slate-500">
-            Active Parent PIN: <span className="font-mono font-semibold text-slate-800">{expectedPin}</span>
+            Enter your 4-digit Parent PIN to authorize this action.
           </p>
 
           {error && (

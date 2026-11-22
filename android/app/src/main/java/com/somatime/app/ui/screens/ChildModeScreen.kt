@@ -1,5 +1,7 @@
 package com.somatime.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,11 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Button
@@ -50,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.somatime.app.data.AssignmentUploadParser
 import com.somatime.app.data.CbcCurriculumRepository
 import com.somatime.app.data.LessonCompletionResult
 import com.somatime.app.data.SomaTimeStore
@@ -135,7 +140,11 @@ fun ChildModeScreen(
             return
         }
         ruleNotice = ""
-        val scaledLesson = CbcCurriculumRepository.scaleLessonQuestionsForGrade(lesson, learnerGrade)
+        val scaledLesson = if (lesson.isCustom) {
+            lesson
+        } else {
+            CbcCurriculumRepository.scaleLessonQuestionsForGrade(lesson, learnerGrade)
+        }
         onRecordDisplayedAssignment(child.id, trackingKey, quizId, resetCatCycle)
         activeIsPriority = isPriority
         activeLesson = scaledLesson
@@ -279,7 +288,7 @@ fun ChildModeScreen(
 
                     Text(
                         if (isLocked) {
-                            "Uninterruptible screen takeover active. YouTube, TikTok & Games are blocked until you complete one 5-minute Kenyan CBC activity or a parent enters PIN (${uiState.parentPin})."
+                            "Uninterruptible screen takeover active. YouTube, TikTok & Games are blocked until you complete one 5-minute Kenyan CBC activity or a parent enters their PIN."
                         } else {
                             "Daily usage: ${child.usedScreenTodayMins}/${child.dailyCapMins} mins · Background watch-minute guard checking."
                         },
@@ -364,28 +373,35 @@ fun ChildModeScreen(
                         )
                         Text(priority.title, fontWeight = FontWeight.Bold)
                         Text(
-                            "${priority.classStream} · ${priority.learningArea.displayName}",
+                            "${priority.classStream} · ${priority.learningArea.displayName}" +
+                                (if (priority.isCustom) " · Custom Task (${priority.customQuestions.size.coerceAtLeast(1)} Qs)" else ""),
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF475569)
                         )
+                        if (priority.instructions.isNotBlank()) {
+                            Text(
+                                priority.instructions,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF334155)
+                            )
+                        }
+                        if (priority.attachmentName.isNotBlank()) {
+                            Text(
+                                "Attached: ${priority.attachmentName}" +
+                                    if (priority.attachmentSizeBytes > 0) " (${AssignmentUploadParser.formatFileSize(priority.attachmentSizeBytes)})" else "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SomaBlue,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                         Button(
                             onClick = {
-                                val target = CbcCurriculumRepository.lessons.firstOrNull {
-                                    it.id == priority.lessonId
-                                } ?: CbcCurriculumRepository.lessons.first()
-                                val contextual = target.copy(
-                                    title = priority.title.ifBlank { target.title },
-                                    grade = priority.grade,
-                                    levelGroup = CbcCurriculumRepository.levelGroupForGrade(priority.grade),
-                                    learningArea = priority.learningArea,
-                                    strand = priority.strand,
-                                    subStrand = priority.subStrand
-                                )
+                                val built = CbcCurriculumRepository.buildLessonFromTeacherAssignment(priority, learnerGrade)
                                 launchLesson(
-                                    lesson = contextual,
+                                    lesson = built,
                                     isPriority = true,
                                     trackingKey = "assign:${priority.id}",
-                                    quizId = target.id
+                                    quizId = priority.lessonId
                                 )
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A))
@@ -726,6 +742,11 @@ private fun NativeLessonPlayer(
     val q = lesson.questions[stepIndex]
     val progress = (stepIndex + if (submitted) 1 else 0).toFloat() / lesson.questions.size
 
+    val playerContext = LocalContext.current
+    val resolvedAttachmentUrl = remember(lesson.attachmentUrl) {
+        AssignmentUploadParser.resolveOpenUrl(lesson.attachmentUrl)
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -769,6 +790,86 @@ private fun NativeLessonPlayer(
             )
             Spacer(modifier = Modifier.height(8.dp))
             LinearProgressIndicator(progress = { progress.coerceAtLeast(0.1f) }, modifier = Modifier.fillMaxWidth())
+        }
+
+        if (lesson.instructions.isNotBlank()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFF0FDF4),
+                    border = BorderStroke(1.dp, Color(0xFFBBF7D0))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            "Teacher Instructions",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = SomaEmerald
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            lesson.instructions,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF1E293B)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (lesson.attachmentName.isNotBlank() || resolvedAttachmentUrl != null) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFF8FAFC),
+                    border = BorderStroke(1.dp, Color(0xFFCBD5E1))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Rounded.AttachFile, contentDescription = null, tint = SomaBlue)
+                            Column {
+                                Text(
+                                    lesson.attachmentName.ifBlank { "Uploaded Teacher Material" },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0F172A)
+                                )
+                                if (lesson.attachmentSizeBytes > 0L) {
+                                    Text(
+                                        AssignmentUploadParser.formatFileSize(lesson.attachmentSizeBytes),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF64748B)
+                                    )
+                                }
+                            }
+                        }
+                        if (resolvedAttachmentUrl != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(resolvedAttachmentUrl))
+                                        playerContext.startActivity(viewIntent)
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Rounded.OpenInNew, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Open")
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         item {

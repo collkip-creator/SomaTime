@@ -18,6 +18,16 @@ import com.somatime.app.model.TeacherAssignment
 object CbcCurriculumRepository {
 
     const val PARENT_PIN = "1234"
+    const val MONTHLY_LICENSE_KES = 30
+    const val MONTHLY_LICENSE_PLAN_LABEL = "Monthly Child Guard · KES 30/mo"
+
+    fun buildLicenseExpiryIso(daysFromNow: Int = 30): String {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        cal.add(java.util.Calendar.DAY_OF_YEAR, daysFromNow)
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return sdf.format(cal.time)
+    }
 
     fun levelGroupForGrade(grade: Int): String = when {
         grade <= 3 -> "Lower Primary"
@@ -652,6 +662,71 @@ object CbcCurriculumRepository {
         subStrand: String
     ): String = "cat:$grade:${learningArea.name}:$strand:$subStrand"
 
+    fun buildLessonFromTeacherAssignment(assign: TeacherAssignment, learnerGrade: Int): CBCLesson {
+        val base = lessons.firstOrNull { it.id == assign.lessonId }
+            ?: lessons.firstOrNull { it.grade == learnerGrade && it.learningArea == assign.learningArea }
+            ?: lessons.firstOrNull { it.learningArea == assign.learningArea }
+            ?: lessons.first()
+
+        val hasCustomQuestions = assign.customQuestions.isNotEmpty()
+        val hasAttachment = assign.attachmentUrl.isNotBlank() || assign.attachmentName.isNotBlank()
+
+        if (assign.isCustom || hasCustomQuestions || hasAttachment) {
+            val fallbackQuestion = QuizQuestion(
+                id = "${assign.id}-ws-1",
+                type = QuestionType.MULTIPLE_CHOICE,
+                prompt = if (assign.attachmentName.isNotBlank()) {
+                    "Have you reviewed your teacher's uploaded material (\"${assign.attachmentName}\") and completed the task instructions?"
+                } else {
+                    "Have you reviewed \"${assign.title}\" and completed the task instructions?"
+                },
+                hint = assign.instructions.trim().ifBlank {
+                    "Open the uploaded material above, follow your teacher's notes, then confirm completion."
+                },
+                options = listOf(
+                    "Yes, I reviewed the material and completed the task",
+                    "I still need to read the teacher instructions"
+                ),
+                correctAnswer = "Yes, I reviewed the material and completed the task",
+                explanation = "Great work completing ${assign.teacherName.ifBlank { "your teacher" }}'s custom assignment!"
+            )
+
+            return CBCLesson(
+                id = assign.lessonId,
+                assignmentId = assign.id,
+                isCustom = true,
+                title = assign.title,
+                grade = assign.grade,
+                levelGroup = levelGroupForGrade(assign.grade),
+                learningArea = assign.learningArea,
+                strand = assign.strand,
+                subStrand = assign.subStrand,
+                durationMins = 5,
+                summary = assign.instructions.trim().ifBlank {
+                    "Custom ${assign.learningArea.displayName} assignment from ${assign.teacherName.ifBlank { "Class Teacher" }}."
+                },
+                instructions = assign.instructions,
+                attachmentName = assign.attachmentName,
+                attachmentUrl = assign.attachmentUrl,
+                attachmentMimeType = assign.attachmentMimeType,
+                attachmentSizeBytes = assign.attachmentSizeBytes,
+                questions = if (hasCustomQuestions) assign.customQuestions else listOf(fallbackQuestion)
+            )
+        }
+
+        val contextual = base.copy(
+            assignmentId = assign.id,
+            title = assign.title.ifBlank { "${assign.subStrand} (${base.title})" },
+            grade = assign.grade,
+            levelGroup = levelGroupForGrade(assign.grade),
+            learningArea = assign.learningArea,
+            strand = assign.strand,
+            subStrand = assign.subStrand
+        )
+
+        return scaleLessonQuestionsForGrade(contextual, learnerGrade)
+    }
+
     fun pickNextUnseenAssignment(
         child: ChildProfile,
         pendingAssignments: List<TeacherAssignment>,
@@ -669,25 +744,13 @@ object CbcCurriculumRepository {
                 else -> pendingAssignments.filter { "assign:${it.id}" != lastAssignKey }.ifEmpty { pendingAssignments }
             }
             val chosen = pool.random()
-            val base = lessons.firstOrNull { it.id == chosen.lessonId }
-                ?: lessons.firstOrNull { it.grade == learnerGrade && it.learningArea == chosen.learningArea }
-                ?: lessons.firstOrNull { it.learningArea == chosen.learningArea }
-                ?: lessons.first()
-
-            val contextual = base.copy(
-                title = chosen.title.ifBlank { "${chosen.subStrand} (${base.title})" },
-                grade = chosen.grade,
-                levelGroup = levelGroupForGrade(chosen.grade),
-                learningArea = chosen.learningArea,
-                strand = chosen.strand,
-                subStrand = chosen.subStrand
-            )
+            val builtLesson = buildLessonFromTeacherAssignment(chosen, learnerGrade)
 
             return PickedAssignmentResult(
-                lesson = scaleLessonQuestionsForGrade(contextual, learnerGrade),
+                lesson = builtLesson,
                 isPriority = true,
                 trackingKey = "assign:${chosen.id}",
-                quizId = base.id,
+                quizId = chosen.lessonId,
                 wrappedCycle = false
             )
         }
@@ -799,7 +862,11 @@ object CbcCurriculumRepository {
                 LearningArea.ENGLISH to CBCRubric.ME,
                 LearningArea.SCIENCE_TECH to CBCRubric.AE
             ),
-            streakDays = 5
+            streakDays = 5,
+            licenseActive = false,
+            licensePlanLabel = MONTHLY_LICENSE_PLAN_LABEL,
+            licenseExpiresAt = null,
+            licensePaymentRef = null
         ),
         ChildProfile(
             id = "brian",
@@ -848,7 +915,11 @@ object CbcCurriculumRepository {
                 LearningArea.ENGLISH to CBCRubric.ME,
                 LearningArea.KISWAHILI to CBCRubric.AE
             ),
-            streakDays = 9
+            streakDays = 9,
+            licenseActive = true,
+            licensePlanLabel = MONTHLY_LICENSE_PLAN_LABEL,
+            licenseExpiresAt = buildLicenseExpiryIso(24),
+            licensePaymentRef = "MPESA-SOMA8009"
         )
     )
 

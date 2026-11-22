@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   Building2,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Download,
+  FileText,
   GraduationCap,
   KeyRound,
   LogOut,
+  Plus,
   Search,
   Send,
+  Trash2,
+  Upload,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -23,12 +28,19 @@ import {
   getStrandsForSubject,
 } from '../data/cbcCurriculum';
 import type {
+  ActivityQuestion,
   CBCRubric,
   ClassStudentRecord,
   LearningArea,
   TeacherAccount,
   TeacherAssignment,
 } from '../types/somatime';
+import {
+  downloadAssignmentCsvTemplate,
+  formatFileSize,
+  isSafeAttachmentUrl,
+  parseUploadedQuestionFile,
+} from '../utils/assignmentParser';
 
 interface TeacherPortalProps {
   teacherAccount: TeacherAccount | null;
@@ -43,6 +55,14 @@ interface TeacherPortalProps {
     learningArea: LearningArea;
     strand: string;
     subStrand: string;
+    isCustom?: boolean;
+    customTitle?: string;
+    instructions?: string;
+    attachmentName?: string;
+    attachmentUrl?: string;
+    attachmentMimeType?: string;
+    attachmentSizeBytes?: number;
+    customQuestions?: ActivityQuestion[];
   }) => void;
   onJumpToChildMode: () => void;
 }
@@ -85,6 +105,32 @@ export function TeacherPortal({
   const [rubricFilter, setRubricFilter] = useState<CBCRubric | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [justPushedTitle, setJustPushedTitle] = useState<string>('');
+
+  // Custom Assignment Authoring & File Upload state
+  const [composerMode, setComposerMode] = useState<'catalog' | 'custom'>('catalog');
+  const [customTitle, setCustomTitle] = useState('');
+  const [customInstructions, setCustomInstructions] = useState('');
+  const [customQuestions, setCustomQuestions] = useState<ActivityQuestion[]>([]);
+  const [uploadedFileMeta, setUploadedFileMeta] = useState<{
+    name: string;
+    url: string;
+    mimeType: string;
+    sizeBytes: number;
+  } | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadFeedback, setUploadFeedback] = useState('');
+  const [uploadError, setUploadError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // New Question Builder inputs
+  const [draftType, setDraftType] = useState<'multiple_choice' | 'fill_blank'>('multiple_choice');
+  const [draftPrompt, setDraftPrompt] = useState('');
+  const [draftOptions, setDraftOptions] = useState<[string, string, string, string]>(['', '', '', '']);
+  const [draftCorrectIndex, setDraftCorrectIndex] = useState(0);
+  const [draftBlankAnswer, setDraftBlankAnswer] = useState('');
+  const [draftHint, setDraftHint] = useState('');
+  const [draftExplanation, setDraftExplanation] = useState('');
+  const [builderError, setBuilderError] = useState('');
 
   // Sync defaults whenever the signed-in teacher changes
   useEffect(() => {
@@ -190,14 +236,204 @@ export function TeacherPortal({
     }).filter((subj) => subj.strands.length > 0);
   }, [catalogSearch]);
 
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadError('');
+    setUploadFeedback('');
+
+    if (file.size > 5 * 1024 * 1024) {
+      setUploadError('File exceeds 5 MB maximum upload size.');
+      e.target.value = '';
+      return;
+    }
+
+    const lower = file.name.toLowerCase();
+    const isTextQuestionFile =
+      lower.endsWith('.csv') || lower.endsWith('.json') || lower.endsWith('.txt');
+
+    setUploadBusy(true);
+    try {
+      if (isTextQuestionFile) {
+        const text = await file.text();
+        const parsed = parseUploadedQuestionFile(file.name, text);
+        if (parsed.questions.length > 0) {
+          setCustomQuestions((prev) => [...prev, ...parsed.questions].slice(0, 15));
+          setUploadFeedback(
+            `Imported ${parsed.questions.length} question(s) from "${file.name}". Review or edit below before publishing.`
+          );
+        } else if (parsed.warnings.length > 0) {
+          setUploadFeedback(parsed.warnings[0]);
+        }
+      }
+
+      const dataBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => reject(new Error('Could not read selected file.'));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/assignments/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          dataBase64,
+        }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        fileName?: string;
+        url?: string;
+        mimeType?: string;
+        sizeBytes?: number;
+      };
+
+      if (!res.ok || !json.ok || !json.url) {
+        setUploadError(json.error || 'Upload failed. Check file format and try again.');
+        return;
+      }
+
+      setUploadedFileMeta({
+        name: json.fileName || file.name,
+        url: json.url,
+        mimeType: json.mimeType || file.type || 'application/octet-stream',
+        sizeBytes: json.sizeBytes || file.size,
+      });
+
+      if (!customTitle.trim()) {
+        const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+        if (baseName) setCustomTitle(baseName.slice(0, 100));
+      }
+
+      if (!isTextQuestionFile) {
+        setUploadFeedback(
+          `Uploaded "${json.fileName || file.name}" (${formatFileSize(json.sizeBytes || file.size)}). Add questions below or publish as a worksheet assignment.`
+        );
+      }
+    } catch {
+      setUploadError('Unable to upload file right now. Check connection and retry.');
+    } finally {
+      setUploadBusy(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleAddDraftQuestion = () => {
+    setBuilderError('');
+    const prompt = draftPrompt.trim();
+    if (!prompt) {
+      setBuilderError('Enter a question prompt before adding.');
+      return;
+    }
+    if (customQuestions.length >= 15) {
+      setBuilderError('Maximum 15 custom questions per assignment reached.');
+      return;
+    }
+
+    if (draftType === 'multiple_choice') {
+      const cleaned = draftOptions.map((o) => o.trim());
+      const nonEmpty = cleaned.filter(Boolean);
+      const chosenAnswer = cleaned[draftCorrectIndex] || '';
+      if (nonEmpty.length < 2) {
+        setBuilderError('Provide at least 2 answer options for a multiple-choice question.');
+        return;
+      }
+      if (!chosenAnswer) {
+        setBuilderError('Select a non-empty option as the correct answer.');
+        return;
+      }
+      const newQ: ActivityQuestion = {
+        id: `tq-${Date.now()}-${customQuestions.length + 1}`,
+        type: 'multiple_choice',
+        prompt,
+        bilingualHint: draftHint.trim() || 'Think carefully through each choice.',
+        options: nonEmpty,
+        correctAnswer: chosenAnswer,
+        explanation: draftExplanation.trim() || `Correct answer: ${chosenAnswer}`,
+      };
+      setCustomQuestions((prev) => [...prev, newQ]);
+    } else {
+      const ans = draftBlankAnswer.trim();
+      if (!ans) {
+        setBuilderError('Enter the expected answer for the fill-in-the-blank question.');
+        return;
+      }
+      const newQ: ActivityQuestion = {
+        id: `tq-${Date.now()}-${customQuestions.length + 1}`,
+        type: 'fill_blank',
+        prompt,
+        bilingualHint: draftHint.trim() || 'Type your answer carefully.',
+        blankPrefix: 'Answer:',
+        blankSuffix: '',
+        correctAnswer: ans,
+        acceptableAnswers: [ans.toLowerCase()],
+        explanation: draftExplanation.trim() || `Expected answer: ${ans}`,
+      };
+      setCustomQuestions((prev) => [...prev, newQ]);
+    }
+
+    setDraftPrompt('');
+    setDraftOptions(['', '', '', '']);
+    setDraftCorrectIndex(0);
+    setDraftBlankAnswer('');
+    setDraftHint('');
+    setDraftExplanation('');
+  };
+
   const handlePush = (e: React.FormEvent) => {
     e.preventDefault();
+    setBuilderError('');
     const finalStrand = useCustomStrand
       ? customStrand.trim() || selectedStrand
       : selectedStrand;
     const finalSubStrand = useCustomStrand
       ? customSubStrand.trim() || selectedSubStrand
       : selectedSubStrand;
+
+    if (composerMode === 'custom') {
+      const titleClean = customTitle.trim();
+      if (!titleClean) {
+        setBuilderError('Enter a title for your custom assignment.');
+        return;
+      }
+      if (customQuestions.length === 0 && !uploadedFileMeta) {
+        setBuilderError('Add at least 1 custom question or upload a worksheet/question file.');
+        return;
+      }
+
+      onPushAssignment({
+        classStream: classStream.trim() || `Grade ${targetGrade} East - ${schoolName}`,
+        school: schoolName.trim() || 'Nairobi Primary School',
+        grade: targetGrade,
+        learningArea: selectedArea,
+        strand: finalStrand,
+        subStrand: finalSubStrand,
+        isCustom: true,
+        customTitle: titleClean,
+        instructions: customInstructions.trim(),
+        attachmentName: uploadedFileMeta?.name,
+        attachmentUrl: uploadedFileMeta?.url,
+        attachmentMimeType: uploadedFileMeta?.mimeType,
+        attachmentSizeBytes: uploadedFileMeta?.sizeBytes,
+        customQuestions,
+      });
+
+      setJustPushedTitle(
+        `Custom Assignment "${titleClean}" (${customQuestions.length} Qs${
+          uploadedFileMeta ? ` · ${uploadedFileMeta.name}` : ''
+        }) pushed to Grade ${targetGrade} at ${schoolName}`
+      );
+      setCustomTitle('');
+      setCustomInstructions('');
+      setCustomQuestions([]);
+      setUploadedFileMeta(null);
+      setUploadFeedback('');
+      return;
+    }
 
     onPushAssignment({
       classStream: classStream.trim() || `Grade ${targetGrade} East - ${schoolName}`,
@@ -372,9 +608,41 @@ export function TeacherPortal({
                   Push CBC Priority Assignment
                 </h2>
                 <p className="text-xs text-slate-600">
-                  Choose subject, grade, and strand learners must interact with first.
+                  Pick a CBC strand or author &amp; upload your own custom assignment.
                 </p>
               </div>
+            </div>
+
+            {/* Mode Switcher: CBC Quick Push vs Custom Assignment & Upload */}
+            <div className="mt-4 grid grid-cols-2 gap-1.5 rounded-2xl bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setComposerMode('catalog');
+                  setBuilderError('');
+                }}
+                className={`min-h-[38px] rounded-xl px-3 py-1.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  composerMode === 'catalog'
+                    ? 'bg-white text-teal-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                CBC Strand Pick
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setComposerMode('custom');
+                  setBuilderError('');
+                }}
+                className={`min-h-[38px] rounded-xl px-3 py-1.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                  composerMode === 'custom'
+                    ? 'bg-white text-teal-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Custom &amp; Upload
+              </button>
             </div>
 
             <div className="mt-5 space-y-4">
@@ -567,12 +835,285 @@ export function TeacherPortal({
                 )}
               </div>
 
+              {composerMode === 'custom' && (
+                <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                  <div>
+                    <h3 className="font-display text-sm font-bold text-slate-900">
+                      Custom Assignment Details &amp; File Upload
+                    </h3>
+                    <p className="mt-0.5 text-[11px] text-slate-600">
+                      Upload a CSV/JSON/TXT question bank for instant import, or attach a PDF, image,
+                      or DOCX worksheet for learners.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="custom-assign-title"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Assignment Title
+                    </label>
+                    <input
+                      id="custom-assign-title"
+                      type="text"
+                      value={customTitle}
+                      onChange={(e) => setCustomTitle(e.target.value)}
+                      placeholder="e.g. Week 4 Fractions & M-Pesa Word Problems"
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-900 focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="custom-assign-instructions"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Instructions for Learner (Optional)
+                    </label>
+                    <textarea
+                      id="custom-assign-instructions"
+                      rows={2}
+                      value={customInstructions}
+                      onChange={(e) => setCustomInstructions(e.target.value)}
+                      placeholder="Write clear steps or revision notes..."
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* File Upload Zone */}
+                  <div className="rounded-xl border border-dashed border-teal-300 bg-white p-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">
+                          Upload Worksheet or Question File
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          PDF, PNG/JPG/WEBP, DOCX, CSV, JSON, or TXT (max 5 MB)
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={downloadAssignmentCsvTemplate}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 hover:underline"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        <span>CSV Template</span>
+                      </button>
+                    </div>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.png,.jpg,.jpeg,.webp,.csv,.json,.txt,.docx"
+                      onChange={(e) => void handleFilePicked(e)}
+                      className="sr-only"
+                    />
+                    <button
+                      type="button"
+                      disabled={uploadBusy}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="mt-2.5 flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-xs font-bold text-teal-900 transition-colors hover:bg-teal-100 disabled:opacity-60"
+                    >
+                      <Upload className="h-4 w-4" />
+                      <span>
+                        {uploadBusy ? 'Uploading & Reading File...' : 'Choose File to Upload'}
+                      </span>
+                    </button>
+
+                    {uploadedFileMeta && (
+                      <div className="mt-2.5 flex items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <FileText className="h-4 w-4 text-emerald-700 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="truncate font-semibold text-slate-900">
+                              {uploadedFileMeta.name}
+                            </p>
+                            <p className="text-[11px] text-slate-600">
+                              {formatFileSize(uploadedFileMeta.sizeBytes)} · Attached
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setUploadedFileMeta(null)}
+                          aria-label="Remove uploaded file"
+                          className="rounded-lg p-1.5 text-slate-500 hover:bg-white hover:text-rose-700"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {uploadFeedback && (
+                      <p className="mt-2 text-[11px] font-medium text-emerald-800">
+                        {uploadFeedback}
+                      </p>
+                    )}
+                    {uploadError && (
+                      <p className="mt-2 text-[11px] font-semibold text-rose-700">{uploadError}</p>
+                    )}
+                  </div>
+
+                  {/* Interactive Question Authoring */}
+                  <div className="space-y-3 border-t border-slate-200 pt-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold text-slate-900">
+                        Custom Questions ({customQuestions.length}/15)
+                      </p>
+                      <div className="flex items-center gap-1 rounded-lg bg-white p-0.5 border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setDraftType('multiple_choice')}
+                          className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                            draftType === 'multiple_choice'
+                              ? 'bg-teal-700 text-white'
+                              : 'text-slate-600'
+                          }`}
+                        >
+                          Multiple Choice
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDraftType('fill_blank')}
+                          className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
+                            draftType === 'fill_blank' ? 'bg-teal-700 text-white' : 'text-slate-600'
+                          }`}
+                        >
+                          Fill in Blank
+                        </button>
+                      </div>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={draftPrompt}
+                      onChange={(e) => setDraftPrompt(e.target.value)}
+                      placeholder="Question prompt (e.g. What is 25% of KES 400?)"
+                      className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                    />
+
+                    {draftType === 'multiple_choice' ? (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-slate-600">
+                          Options (select the circle for the correct answer):
+                        </p>
+                        {draftOptions.map((opt, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="draft-correct-option"
+                              checked={draftCorrectIndex === idx}
+                              onChange={() => setDraftCorrectIndex(idx)}
+                              aria-label={`Mark option ${idx + 1} as correct`}
+                              className="h-4 w-4 text-teal-700 focus:ring-teal-600"
+                            />
+                            <input
+                              type="text"
+                              value={opt}
+                              onChange={(e) => {
+                                const next: [string, string, string, string] = [...draftOptions] as [
+                                  string,
+                                  string,
+                                  string,
+                                  string,
+                                ];
+                                next[idx] = e.target.value;
+                                setDraftOptions(next);
+                              }}
+                              placeholder={`Option ${idx + 1}${idx < 2 ? ' (required)' : ' (optional)'}`}
+                              className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={draftBlankAnswer}
+                        onChange={(e) => setDraftBlankAnswer(e.target.value)}
+                        placeholder="Expected correct answer (e.g. 100 or Photosynthesis)"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                      />
+                    )}
+
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <input
+                        type="text"
+                        value={draftHint}
+                        onChange={(e) => setDraftHint(e.target.value)}
+                        placeholder="Study hint (optional)"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={draftExplanation}
+                        onChange={(e) => setDraftExplanation(e.target.value)}
+                        placeholder="Feedback explanation (optional)"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-teal-600 focus:outline-none"
+                      />
+                    </div>
+
+                    {builderError && (
+                      <p className="text-[11px] font-semibold text-rose-700">{builderError}</p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleAddDraftQuestion}
+                      className="flex min-h-[40px] w-full items-center justify-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-800 hover:bg-slate-100"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Add Question to Assignment</span>
+                    </button>
+
+                    {customQuestions.length > 0 && (
+                      <div className="space-y-2 pt-1">
+                        {customQuestions.map((q, idx) => (
+                          <div
+                            key={q.id}
+                            className="flex items-start justify-between gap-2 rounded-xl border border-slate-200 bg-white p-2.5 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-900">
+                                <span className="font-mono text-teal-800">
+                                  {String(idx + 1).padStart(2, '0')}.
+                                </span>{' '}
+                                {q.prompt}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-slate-500">
+                                {q.type === 'multiple_choice' ? 'Multiple Choice' : 'Fill in Blank'} ·
+                                Answer: <span className="font-semibold">{q.correctAnswer}</span>
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCustomQuestions((prev) => prev.filter((item) => item.id !== q.id))
+                              }
+                              aria-label={`Remove question ${idx + 1}`}
+                              className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-700 shrink-0"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <button
                 type="submit"
                 className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-teal-800"
               >
                 <Send className="h-4 w-4" />
-                <span>Push Assignment to Students</span>
+                <span>
+                  {composerMode === 'custom'
+                    ? 'Publish Custom Assignment & Upload'
+                    : 'Push Assignment to Students'}
+                </span>
               </button>
             </div>
 
@@ -611,6 +1152,28 @@ export function TeacherPortal({
                         {assign.school ? `${assign.school} · ` : ''}
                         Grade {assign.grade} · {assign.learningArea} · {assign.strand}
                       </p>
+                      {(assign.isCustom ||
+                        assign.customQuestions?.length ||
+                        assign.attachmentName) && (
+                        <p className="mt-0.5 text-[11px] font-medium text-slate-700">
+                          Custom Task
+                          {assign.customQuestions?.length
+                            ? ` · ${assign.customQuestions.length} teacher question(s)`
+                            : ''}
+                          {assign.attachmentName ? ` · File: ${assign.attachmentName}` : ''}
+                        </p>
+                      )}
+                      {assign.attachmentUrl && isSafeAttachmentUrl(assign.attachmentUrl) && (
+                        <a
+                          href={assign.attachmentUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 hover:underline"
+                        >
+                          <FileText className="h-3 w-3" />
+                          <span>Open Uploaded Material</span>
+                        </a>
+                      )}
                       {assign.teacherName && (
                         <p className="mt-0.5 text-[11px] font-medium text-teal-800">
                           Pushed by {assign.teacherName}

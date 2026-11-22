@@ -14,13 +14,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -29,11 +34,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -50,6 +57,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -80,12 +90,25 @@ fun ParentDashboardScreen(
     onRetryCloudSync: () -> Unit,
     onOpenSetupWizard: () -> Unit,
     onRequestApprovalPin: (PendingApproval) -> Unit,
-    onDeclineApproval: (String, String) -> Unit
+    onDeclineApproval: (String, String) -> Unit,
+    onUpdateParentPin: (String) -> Boolean,
+    onActivateChildLicense: (String, String) -> Unit,
+    onActivateAllUnpaidLicenses: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val child = uiState.selectedChild
     var showAddDialog by remember { mutableStateOf(false) }
+
+    var newPinInput by remember { mutableStateOf("") }
+    var confirmPinInput by remember { mutableStateOf("") }
+    var showPinFields by remember { mutableStateOf(false) }
+    var showCurrentPin by remember { mutableStateOf(false) }
+    var pinUpdateMsg by remember { mutableStateOf("") }
+    var pinUpdateIsError by remember { mutableStateOf(false) }
+
+    var mpesaPhone by remember(uiState.parentContact) { mutableStateOf(uiState.parentContact) }
+    var licenseFeedback by remember { mutableStateOf("") }
 
     var hasUsageStats by remember { mutableStateOf(UsageAccessHelper.hasUsageStatsPermission(context)) }
     var hasOverlay by remember { mutableStateOf(UsageAccessHelper.canDrawOverlays(context)) }
@@ -157,11 +180,308 @@ fun ParentDashboardScreen(
                         selected = selected,
                         onClick = { onSelectChild(profile.id) },
                         label = {
+                            val badge = if (profile.licenseActive) "Licensed" else "Unpaid"
                             Text(
-                                "${profile.name} · G${profile.grade} (${SomaTimeStore.formatClock(profile.availableScreenSeconds)})"
+                                "${profile.name} · G${profile.grade} · $badge (${SomaTimeStore.formatClock(profile.availableScreenSeconds)})"
                             )
                         }
                     )
+                }
+            }
+        }
+
+        // Licensing Area (Per Child Per Month)
+        item {
+            val unpaidChildren = uiState.children.filter { !it.licenseActive }
+            val activeCount = uiState.children.size - unpaidChildren.size
+            val perChildKes = CbcCurriculumRepository.MONTHLY_LICENSE_KES
+            val unpaidTotalKes = unpaidChildren.size * perChildKes
+
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (child.licenseActive) Color(0xFFF0FDF4) else Color(0xFFFFFBEB)
+                ),
+                border = BorderStroke(
+                    1.dp,
+                    if (child.licenseActive) SomaEmerald else Color(0xFFF59E0B)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                if (child.licenseActive) Icons.Rounded.Verified else Icons.Rounded.Payments,
+                                contentDescription = null,
+                                tint = if (child.licenseActive) SomaEmerald else Color(0xFFD97706)
+                            )
+                            Column {
+                                Text(
+                                    "Licensing Area · ${child.name.split(" ").first()}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "KES $perChildKes / child / month · $activeCount/${uiState.children.size} children licensed",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF475569)
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (child.licenseActive) SomaEmerald else Color(0xFFD97706)
+                        ) {
+                            Text(
+                                text = if (child.licenseActive) "ACTIVE" else "UNPAID",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    Text(
+                        if (child.licenseActive) {
+                            "License active (${child.licensePaymentRef ?: "Verified"}) · Expires ${(child.licenseExpiresAt ?: "").take(10).ifEmpty { "30 days" }}. Pairing codes and Child Lock Hand-Off are unlocked."
+                        } else {
+                            "Pay KES $perChildKes/month for ${child.name} to generate phone pairing codes and activate \"Activate Child Lock & Hand Over Phone\" on a shared device."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF334155)
+                    )
+
+                    // Per-child status breakdown
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        uiState.children.forEach { profile ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${profile.name} (G${profile.grade})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    if (profile.licenseActive) {
+                                        "Active · ${profile.licensePaymentRef ?: "Paid"}"
+                                    } else {
+                                        "KES $perChildKes/mo required"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (profile.licenseActive) SomaEmerald else Color(0xFFB45309)
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    Text(
+                        "Payment Method: M-Pesa Only · Paybill 174379 (Safaricom Daraja STK)",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = SomaEmerald
+                    )
+
+                    OutlinedTextField(
+                        value = mpesaPhone,
+                        onValueChange = {
+                            mpesaPhone = it
+                            licenseFeedback = ""
+                        },
+                        label = { Text("Safaricom M-Pesa Phone Number (e.g. 0712 345 678)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Button(
+                        onClick = {
+                            val digits = mpesaPhone.filter(Char::isDigit)
+                            if (digits.length < 9) {
+                                licenseFeedback = "Enter a valid Safaricom M-Pesa phone number."
+                                return@Button
+                            }
+                            onActivateChildLicense(child.id, mpesaPhone)
+                            licenseFeedback = "M-Pesa license activated for ${child.name} (KES $perChildKes/mo). Pairing & Child Lock unlocked ✓"
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (child.licenseActive) SomaTeal else Color(0xFF059669)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            if (child.licenseActive) {
+                                "Renew ${child.name.split(" ").first()}'s License via M-Pesa (+30 Days · KES $perChildKes)"
+                            } else {
+                                "Pay KES $perChildKes/mo via M-Pesa · ${child.name.split(" ").first()}"
+                            }
+                        )
+                    }
+
+                    if (unpaidChildren.size > 1) {
+                        OutlinedButton(
+                            onClick = {
+                                val digits = mpesaPhone.filter(Char::isDigit)
+                                if (digits.length < 9) {
+                                    licenseFeedback = "Enter your Safaricom M-Pesa number first."
+                                    return@OutlinedButton
+                                }
+                                onActivateAllUnpaidLicenses(mpesaPhone)
+                                licenseFeedback = "All ${unpaidChildren.size} unpaid child licenses activated via M-Pesa (KES $unpaidTotalKes/mo) ✓"
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Pay All Unpaid via M-Pesa (${unpaidChildren.size} × KES $perChildKes = KES $unpaidTotalKes/mo)")
+                        }
+                    }
+
+                    if (licenseFeedback.isNotEmpty()) {
+                        Text(
+                            text = licenseFeedback,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (child.licenseActive) Color(0xFF065F46) else Color(0xFFB91C1C),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+        }
+
+        // Custom Parent PIN Setup & Security Card
+        item {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Parent Security & Custom PIN",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                if (uiState.parentPin == CbcCurriculumRepository.PARENT_PIN) {
+                                    "Using default PIN · Set your own 4-digit PIN below"
+                                } else {
+                                    "Custom 4-digit Parent PIN active (${if (showCurrentPin) uiState.parentPin else "••••"})"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (uiState.parentPin == CbcCurriculumRepository.PARENT_PIN) {
+                                    Color(0xFFD97706)
+                                } else {
+                                    SomaEmerald
+                                }
+                            )
+                        }
+                        IconButton(onClick = { showCurrentPin = !showCurrentPin }) {
+                            Icon(
+                                if (showCurrentPin) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (showCurrentPin) "Hide current PIN" else "Show current PIN"
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = newPinInput,
+                        onValueChange = { input ->
+                            newPinInput = input.filter { it.isDigit() }.take(4)
+                            pinUpdateMsg = ""
+                        },
+                        label = { Text("New 4-Digit Parent PIN") },
+                        visualTransformation = if (showPinFields) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPinFields = !showPinFields }) {
+                                Icon(
+                                    if (showPinFields) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                    contentDescription = if (showPinFields) "Hide PIN" else "Show PIN"
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = confirmPinInput,
+                        onValueChange = { input ->
+                            confirmPinInput = input.filter { it.isDigit() }.take(4)
+                            pinUpdateMsg = ""
+                        },
+                        label = { Text("Confirm New 4-Digit PIN") },
+                        visualTransformation = if (showPinFields) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    if (pinUpdateMsg.isNotEmpty()) {
+                        Text(
+                            text = pinUpdateMsg,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (pinUpdateIsError) Color(0xFFDC2626) else SomaEmerald,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            if (newPinInput.length != 4) {
+                                pinUpdateIsError = true
+                                pinUpdateMsg = "PIN must be exactly 4 digits."
+                                return@Button
+                            }
+                            if (newPinInput != confirmPinInput) {
+                                pinUpdateIsError = true
+                                pinUpdateMsg = "New PIN and Confirm PIN do not match."
+                                return@Button
+                            }
+                            val ok = onUpdateParentPin(newPinInput)
+                            if (ok) {
+                                pinUpdateIsError = false
+                                pinUpdateMsg = "Custom Parent PIN updated and synced to Cloud ✓"
+                                newPinInput = ""
+                                confirmPinInput = ""
+                            } else {
+                                pinUpdateIsError = true
+                                pinUpdateMsg = "Could not save PIN. Enter 4 digits."
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
+                    ) {
+                        Icon(Icons.Rounded.Key, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save Custom Parent PIN")
+                    }
                 }
             }
         }
@@ -281,6 +601,7 @@ fun ParentDashboardScreen(
                     }
                     Button(
                         onClick = { onActivateHandOff(child.id) },
+                        enabled = child.licenseActive,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = SomaTeal),
                         shape = RoundedCornerShape(14.dp)
@@ -290,9 +611,13 @@ fun ParentDashboardScreen(
                         Text("Activate Child Lock & Hand Over Phone")
                     }
                     Text(
-                        "Locks immediately into Child Mode. Parent PIN ${uiState.parentPin} required to exit.",
+                        if (child.licenseActive) {
+                            "Locks immediately into Child Mode. Your Parent PIN is required to exit."
+                        } else {
+                            "Monthly license required (KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo) to activate Child Lock & Hand-Off Mode."
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF64748B)
+                        color = if (child.licenseActive) Color(0xFF64748B) else Color(0xFFB45309)
                     )
 
                     HorizontalDivider()
@@ -309,20 +634,24 @@ fun ParentDashboardScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                if (child.isPaired) {
-                                    "Paired · Background watch-minute guard active"
-                                } else {
-                                    "Not paired yet · Enter this code on child's phone"
+                                when {
+                                    !child.licenseActive -> "Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license above to unlock & generate pairing code"
+                                    child.isPaired -> "Paired · Background watch-minute guard active"
+                                    else -> "Not paired yet · Enter this code on child's phone"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (child.isPaired) SomaEmerald else Color(0xFF64748B)
+                                color = when {
+                                    !child.licenseActive -> Color(0xFFB45309)
+                                    child.isPaired -> SomaEmerald
+                                    else -> Color(0xFF64748B)
+                                }
                             )
                         }
                         Text(
-                            text = child.pairingCode,
+                            text = if (child.licenseActive) child.pairingCode else "SOMA-••••",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
-                            color = SomaTeal
+                            color = if (child.licenseActive) SomaTeal else Color(0xFF94A3B8)
                         )
                     }
 
@@ -336,6 +665,7 @@ fun ParentDashboardScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = { onRegeneratePairingCode(child.id) },
+                            enabled = child.licenseActive,
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Rounded.Refresh, contentDescription = null)
@@ -344,6 +674,7 @@ fun ParentDashboardScreen(
                         }
                         OutlinedButton(
                             onClick = onRetryCloudSync,
+                            enabled = child.licenseActive,
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Sync Cloud")

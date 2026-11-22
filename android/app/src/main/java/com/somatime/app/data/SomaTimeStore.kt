@@ -12,6 +12,8 @@ import com.somatime.app.model.ClassStudentRecord
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
 import com.somatime.app.model.PendingApproval
+import com.somatime.app.model.QuestionType
+import com.somatime.app.model.QuizQuestion
 import com.somatime.app.model.RoleView
 import com.somatime.app.model.TeacherAccount
 import com.somatime.app.model.TeacherAssignment
@@ -37,6 +39,23 @@ data class LessonCompletionResult(
     val rubric: CBCRubric,
     val queuedForApproval: Boolean,
     val cappedOut: Boolean
+)
+
+data class PushAssignmentRequest(
+    val classStream: String,
+    val school: String,
+    val grade: Int,
+    val learningArea: LearningArea,
+    val strand: String,
+    val subStrand: String,
+    val isCustom: Boolean = false,
+    val customTitle: String = "",
+    val instructions: String = "",
+    val attachmentName: String = "",
+    val attachmentUrl: String = "",
+    val attachmentMimeType: String = "",
+    val attachmentSizeBytes: Long = 0L,
+    val customQuestions: List<QuizQuestion> = emptyList()
 )
 
 data class PairingResult(
@@ -176,7 +195,11 @@ class SomaTimeStore private constructor(context: Context) {
                 requireParentApproval = prefs.getBoolean("${prefix}approval", child.requireParentApproval),
                 isLocked = prefs.getBoolean("${prefix}locked", child.isLocked),
                 isPaired = prefs.getBoolean("${prefix}paired", child.isPaired),
-                pairingCode = prefs.getString("${prefix}code", child.pairingCode) ?: child.pairingCode
+                pairingCode = prefs.getString("${prefix}code", child.pairingCode) ?: child.pairingCode,
+                licenseActive = prefs.getBoolean("${prefix}license_active", child.licenseActive),
+                licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+                licenseExpiresAt = prefs.getString("${prefix}license_expires_at", child.licenseExpiresAt),
+                licensePaymentRef = prefs.getString("${prefix}license_payment_ref", child.licensePaymentRef)
             )
         }
 
@@ -212,7 +235,11 @@ class SomaTimeStore private constructor(context: Context) {
                 pendingApprovals = emptyList(),
                 activityLogs = emptyList(),
                 rubricByArea = mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
-                streakDays = 1
+                streakDays = 1,
+                licenseActive = prefs.getBoolean("${prefix}license_active", false),
+                licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+                licenseExpiresAt = prefs.getString("${prefix}license_expires_at", null),
+                licensePaymentRef = prefs.getString("${prefix}license_payment_ref", null)
             )
         }
 
@@ -223,6 +250,9 @@ class SomaTimeStore private constructor(context: Context) {
         val lastInterrupted = prefs.getString("last_interrupted_app_package", null)
         val displayedKeys = decodeStringListMap(prefs.getString("displayed_keys_json", null))
         val displayedQuizzes = decodeStringListMap(prefs.getString("displayed_quiz_ids_json", null))
+        val savedAssignments = decodeAssignments(prefs.getString("custom_assignments_json", null))
+        val savedIds = savedAssignments.map { it.id }.toSet()
+        val mergedAssignments = savedAssignments + base.assignments.filterNot { it.id in savedIds }
 
         return base.copy(
             roleView = savedRole,
@@ -236,7 +266,8 @@ class SomaTimeStore private constructor(context: Context) {
             lastInterruptedAppPackage = lastInterrupted,
             displayedKeysByChild = displayedKeys,
             displayedQuizIdsByChild = displayedQuizzes,
-            children = allChildren
+            children = allChildren,
+            assignments = mergedAssignments
         )
     }
 
@@ -339,6 +370,10 @@ class SomaTimeStore private constructor(context: Context) {
         editor.putString("last_interrupted_app_package", s.lastInterruptedAppPackage)
         editor.putString("displayed_keys_json", encodeStringListMap(s.displayedKeysByChild))
         editor.putString("displayed_quiz_ids_json", encodeStringListMap(s.displayedQuizIdsByChild))
+        editor.putString(
+            "custom_assignments_json",
+            encodeAssignments(s.assignments.filter { it.isCustom || it.id.startsWith("assign-") }.take(20))
+        )
         s.children.forEach { c ->
             val prefix = "child_${c.id}_"
             editor.putString("${prefix}name", c.name)
@@ -353,6 +388,9 @@ class SomaTimeStore private constructor(context: Context) {
             editor.putBoolean("${prefix}locked", c.isLocked)
             editor.putBoolean("${prefix}paired", c.isPaired)
             editor.putString("${prefix}code", c.pairingCode)
+            editor.putBoolean("${prefix}license_active", c.licenseActive)
+            editor.putString("${prefix}license_expires_at", c.licenseExpiresAt)
+            editor.putString("${prefix}license_payment_ref", c.licensePaymentRef)
         }
         editor.apply()
     }
@@ -431,13 +469,143 @@ class SomaTimeStore private constructor(context: Context) {
                 it.copy(
                     cloudSyncOk = res.ok,
                     cloudSyncMessage = if (res.ok) {
-                        "Synced to Cloud ✓ · Code ${child.pairingCode} is active"
+                        if (child.licenseActive) {
+                            "Synced to Cloud ✓ · Code ${child.pairingCode} is active"
+                        } else {
+                            "Synced to Cloud ✓ · Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license to unlock pairing"
+                        }
                     } else {
                         res.errorMessage
                     }
                 )
             }
         }
+    }
+
+    fun updateParentPin(newPin: String): Boolean {
+        val clean = newPin.filter(Char::isDigit).take(4)
+        if (clean.length != 4) return false
+        _state.update { current ->
+            current.copy(parentPin = clean).also(::persistState)
+        }
+        val childrenSnapshot = _state.value.children
+        scope.launch {
+            var allOk = true
+            var lastErr = ""
+            childrenSnapshot.forEach { child ->
+                val res = FirestoreSyncClient.publishPairingSession(child, clean)
+                if (!res.ok) {
+                    allOk = false
+                    lastErr = res.errorMessage
+                }
+            }
+            _state.update {
+                it.copy(
+                    cloudSyncOk = allOk,
+                    cloudSyncMessage = if (allOk) {
+                        "Parent PIN updated & synced to Cloud ✓"
+                    } else {
+                        lastErr.ifEmpty { "PIN saved locally; Cloud sync failed" }
+                    }
+                )
+            }
+        }
+        return true
+    }
+
+    fun activateChildLicense(
+        childId: String,
+        mpesaPhone: String
+    ): ChildProfile? {
+        val suffix = ((System.currentTimeMillis() % 900000L) + 100000L).toString()
+        val cleanPhone = mpesaPhone.filter(Char::isDigit).takeLast(4)
+        val paymentRef = "MPESA-${if (cleanPhone.isNotEmpty()) cleanPhone else "SOMA"}$suffix".take(24)
+        val expiresAt = CbcCurriculumRepository.buildLicenseExpiryIso(30)
+        var updatedTarget: ChildProfile? = null
+
+        _state.update { current ->
+            val next = current.children.map { child ->
+                if (child.id == childId) {
+                    child.copy(
+                        licenseActive = true,
+                        licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+                        licenseExpiresAt = expiresAt,
+                        licensePaymentRef = paymentRef
+                    ).also { updatedTarget = it }
+                } else {
+                    child
+                }
+            }
+            current.copy(children = next).also(::persistState)
+        }
+
+        val pin = _state.value.parentPin
+        updatedTarget?.let { target ->
+            scope.launch {
+                val res = FirestoreSyncClient.publishPairingSession(target, pin)
+                _state.update {
+                    it.copy(
+                        cloudSyncOk = res.ok,
+                        cloudSyncMessage = if (res.ok) {
+                            "M-Pesa License active (${target.licensePaymentRef}) · Code ${target.pairingCode} unlocked ✓"
+                        } else {
+                            res.errorMessage
+                        }
+                    )
+                }
+            }
+        }
+        return updatedTarget
+    }
+
+    fun activateAllUnpaidLicenses(mpesaPhone: String): Int {
+        val unpaidIds = _state.value.children.filter { !it.licenseActive }.map { it.id }.toSet()
+        if (unpaidIds.isEmpty()) return 0
+        val suffix = ((System.currentTimeMillis() % 900000L) + 100000L).toString()
+        val cleanPhone = mpesaPhone.filter(Char::isDigit).takeLast(4)
+        val paymentRef = "MPESA-${if (cleanPhone.isNotEmpty()) cleanPhone else "SOMA"}$suffix".take(24)
+        val expiresAt = CbcCurriculumRepository.buildLicenseExpiryIso(30)
+        val updatedTargets = mutableListOf<ChildProfile>()
+
+        _state.update { current ->
+            val next = current.children.map { child ->
+                if (child.id in unpaidIds) {
+                    child.copy(
+                        licenseActive = true,
+                        licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+                        licenseExpiresAt = expiresAt,
+                        licensePaymentRef = paymentRef
+                    ).also { updatedTargets.add(it) }
+                } else {
+                    child
+                }
+            }
+            current.copy(children = next).also(::persistState)
+        }
+
+        val pin = _state.value.parentPin
+        scope.launch {
+            var allOk = true
+            var lastErr = ""
+            updatedTargets.forEach { target ->
+                val res = FirestoreSyncClient.publishPairingSession(target, pin)
+                if (!res.ok) {
+                    allOk = false
+                    lastErr = res.errorMessage
+                }
+            }
+            _state.update {
+                it.copy(
+                    cloudSyncOk = allOk,
+                    cloudSyncMessage = if (allOk) {
+                        "Activated ${updatedTargets.size} child license(s) · Synced to Cloud ✓"
+                    } else {
+                        lastErr.ifEmpty { "Licenses activated locally; Cloud sync failed" }
+                    }
+                )
+            }
+        }
+        return updatedTargets.size
     }
 
     fun updateChild(childId: String, transform: (ChildProfile) -> ChildProfile) {
@@ -460,7 +628,11 @@ class SomaTimeStore private constructor(context: Context) {
                     it.copy(
                         cloudSyncOk = res.ok,
                         cloudSyncMessage = if (res.ok) {
-                            "Synced to Cloud ✓ · Code ${target.pairingCode} is active"
+                            if (target.licenseActive) {
+                                "Synced to Cloud ✓ · Code ${target.pairingCode} is active"
+                            } else {
+                                "Synced to Cloud ✓ · Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license to unlock pairing"
+                            }
                         } else {
                             res.errorMessage
                         }
@@ -471,6 +643,8 @@ class SomaTimeStore private constructor(context: Context) {
     }
 
     fun regeneratePairingCode(childId: String): String {
+        val currentTarget = _state.value.children.firstOrNull { it.id == childId } ?: return ""
+        if (!currentTarget.licenseActive) return currentTarget.pairingCode
         val code = CbcCurriculumRepository.generatePairingCode()
         updateChild(childId) { it.copy(pairingCode = code, isPaired = false) }
         return code
@@ -515,7 +689,11 @@ class SomaTimeStore private constructor(context: Context) {
             pendingApprovals = emptyList(),
             activityLogs = emptyList(),
             rubricByArea = mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
-            streakDays = 1
+            streakDays = 1,
+            licenseActive = false,
+            licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+            licenseExpiresAt = null,
+            licensePaymentRef = null
         )
         _state.update { current ->
             current.copy(
@@ -532,7 +710,7 @@ class SomaTimeStore private constructor(context: Context) {
             it.copy(
                 cloudSyncOk = syncRes.ok,
                 cloudSyncMessage = if (syncRes.ok) {
-                    "Synced to Cloud ✓ · Enter $code on your daughter's phone"
+                    "Synced to Cloud ✓ · Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license in Parents tab to unlock ${created.pairingCode}"
                 } else {
                     syncRes.errorMessage
                 }
@@ -551,6 +729,12 @@ class SomaTimeStore private constructor(context: Context) {
         val cloudRes = FirestoreSyncClient.fetchAndPairSession(normalized)
         val cloud = cloudRes.data
         if (cloudRes.ok && cloud != null) {
+            if (!cloud.licenseActive) {
+                return PairingResult(
+                    false,
+                    message = "Monthly child license (KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo) is not active for ${cloud.childName}. Ask a parent to activate it in the Parents tab first."
+                )
+            }
             val existingLocal = _state.value.children.firstOrNull {
                 it.id == cloud.childId || FirestoreSyncClient.normalizeCode(it.pairingCode) == normalized
             }
@@ -577,7 +761,11 @@ class SomaTimeStore private constructor(context: Context) {
                 pendingApprovals = existingLocal?.pendingApprovals ?: emptyList(),
                 activityLogs = existingLocal?.activityLogs ?: emptyList(),
                 rubricByArea = existingLocal?.rubricByArea ?: mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
-                streakDays = existingLocal?.streakDays ?: 1
+                streakDays = existingLocal?.streakDays ?: 1,
+                licenseActive = cloud.licenseActive,
+                licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+                licenseExpiresAt = cloud.licenseExpiresAt.ifEmpty { null },
+                licensePaymentRef = cloud.licensePaymentRef.ifEmpty { null }
             )
 
             _state.update { current ->
@@ -615,6 +803,13 @@ class SomaTimeStore private constructor(context: Context) {
                 "No child profile matches \"$normalized\"."
             }
         )
+
+        if (!matched.licenseActive) {
+            return PairingResult(
+                false,
+                message = "Monthly child license (KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo) is not active for ${matched.name}. Ask a parent to pay the license in the Parents tab first."
+            )
+        }
 
         val pairedLocal = matched.copy(deviceMode = DeviceMode.OWN_PHONE, isPaired = true)
         _state.update { current ->
@@ -655,6 +850,7 @@ class SomaTimeStore private constructor(context: Context) {
                     cloud.dailyCapMins != child.dailyCapMins ||
                         cloud.exchangeRateMins != child.exchangeRateMins ||
                         cloud.requireParentApproval != child.requireParentApproval ||
+                        cloud.licenseActive != child.licenseActive ||
                         cloud.parentPin != current.parentPin
                 if (remoteUnlocked || settingsChanged) {
                     _state.update { s ->
@@ -666,6 +862,9 @@ class SomaTimeStore private constructor(context: Context) {
                                     dailyCapMins = cloud.dailyCapMins,
                                     exchangeRateMins = cloud.exchangeRateMins,
                                     requireParentApproval = cloud.requireParentApproval,
+                                    licenseActive = cloud.licenseActive,
+                                    licenseExpiresAt = cloud.licenseExpiresAt.ifEmpty { c.licenseExpiresAt },
+                                    licensePaymentRef = cloud.licensePaymentRef.ifEmpty { c.licensePaymentRef },
                                     availableScreenSeconds = if (remoteUnlocked) cloud.availableScreenSeconds else c.availableScreenSeconds,
                                     isLocked = if (remoteUnlocked) {
                                         cloud.isLocked || cloud.availableScreenSeconds <= 0
@@ -707,6 +906,8 @@ class SomaTimeStore private constructor(context: Context) {
                     cloudSyncOk = true,
                     cloudSyncMessage = if (cloud.isPaired) {
                         "Synced to Cloud ✓ · Learner phone paired"
+                    } else if (!child.licenseActive) {
+                        "Synced to Cloud ✓ · Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license to unlock pairing"
                     } else {
                         "Synced to Cloud ✓ · Ready for daughter's phone"
                     },
@@ -760,7 +961,11 @@ class SomaTimeStore private constructor(context: Context) {
             pendingApprovals = emptyList(),
             activityLogs = emptyList(),
             rubricByArea = mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
-            streakDays = 1
+            streakDays = 1,
+            licenseActive = false,
+            licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+            licenseExpiresAt = null,
+            licensePaymentRef = null
         )
         _state.update {
             it.copy(
@@ -774,7 +979,7 @@ class SomaTimeStore private constructor(context: Context) {
                 it.copy(
                     cloudSyncOk = res.ok,
                     cloudSyncMessage = if (res.ok) {
-                        "Synced to Cloud ✓ · Code ${created.pairingCode} is active"
+                        "Synced to Cloud ✓ · Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license to unlock pairing"
                     } else {
                         res.errorMessage
                     }
@@ -784,6 +989,8 @@ class SomaTimeStore private constructor(context: Context) {
     }
 
     fun activateHandOffMode(childId: String) {
+        val existing = _state.value.children.firstOrNull { it.id == childId } ?: return
+        if (!existing.licenseActive) return
         var updatedTarget: ChildProfile? = null
         _state.update { current ->
             val nextChildren = current.children.map {
@@ -910,7 +1117,9 @@ class SomaTimeStore private constructor(context: Context) {
             }
 
             val nextAssignments = current.assignments.map { assign ->
-                if (assign.lessonId == lesson.id && childId !in assign.completedByChildIds) {
+                val isMatch = (lesson.assignmentId != null && assign.id == lesson.assignmentId) ||
+                    assign.lessonId == lesson.id
+                if (isMatch && childId !in assign.completedByChildIds) {
                     assign.copy(completedByChildIds = assign.completedByChildIds + childId)
                 } else {
                     assign
@@ -1045,36 +1254,57 @@ class SomaTimeStore private constructor(context: Context) {
         _state.update { it.copy(teacherAccount = null).also(::persistState) }
     }
 
-    fun pushAssignment(
-        classStream: String,
-        school: String,
-        grade: Int,
-        learningArea: LearningArea,
-        strand: String,
-        subStrand: String
-    ) {
+    fun pushAssignment(req: PushAssignmentRequest) {
         val activeTeacher = _state.value.teacherAccount
-        val targetSchool = school.trim().ifEmpty { activeTeacher?.school ?: "Nairobi Primary School" }
+        val targetSchool = req.school.trim().ifEmpty { activeTeacher?.school ?: "Nairobi Primary School" }
         val matchingLesson = CbcCurriculumRepository.lessons.firstOrNull {
-            it.learningArea == learningArea && it.grade == grade
+            it.learningArea == req.learningArea && it.grade == req.grade
         } ?: CbcCurriculumRepository.lessons.firstOrNull {
-            it.learningArea == learningArea
+            it.learningArea == req.learningArea
         } ?: CbcCurriculumRepository.lessons.first()
+
+        val assignId = "assign-${System.currentTimeMillis()}"
+        val isCustomMode = req.isCustom || req.customQuestions.isNotEmpty() || req.attachmentName.isNotBlank()
+        val resolvedStrand = req.strand.trim().ifEmpty {
+            if (isCustomMode) "Teacher Custom Task" else "Core Strand"
+        }
+        val resolvedSubStrand = req.subStrand.trim().ifEmpty {
+            if (isCustomMode) req.customTitle.trim().ifEmpty { "Custom Worksheet" } else "Core Topic"
+        }
+        val resolvedTitle = req.customTitle.trim().ifEmpty {
+            if (isCustomMode) {
+                "$resolvedSubStrand (Teacher Custom Task)"
+            } else {
+                "$resolvedSubStrand (${matchingLesson.title})"
+            }
+        }
+        val safeUrl = if (AssignmentUploadParser.isSafeAttachmentUrl(req.attachmentUrl)) {
+            req.attachmentUrl.trim()
+        } else {
+            ""
+        }
 
         val nowTime = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
         val created = TeacherAssignment(
-            id = "assign-${System.currentTimeMillis()}",
-            classStream = classStream.trim().ifEmpty { "Grade $grade East - $targetSchool" },
+            id = assignId,
+            classStream = req.classStream.trim().ifEmpty { "Grade ${req.grade} East - $targetSchool" },
             school = targetSchool,
-            grade = grade,
-            learningArea = learningArea,
-            strand = strand,
-            subStrand = subStrand,
-            lessonId = matchingLesson.id,
-            title = "$subStrand (${matchingLesson.title})",
+            grade = req.grade,
+            learningArea = req.learningArea,
+            strand = resolvedStrand,
+            subStrand = resolvedSubStrand,
+            lessonId = if (isCustomMode) "custom-$assignId" else matchingLesson.id,
+            title = resolvedTitle,
+            isCustom = isCustomMode,
+            instructions = req.instructions.trim(),
+            attachmentName = req.attachmentName.trim(),
+            attachmentUrl = safeUrl,
+            attachmentMimeType = req.attachmentMimeType.trim(),
+            attachmentSizeBytes = req.attachmentSizeBytes.coerceAtLeast(0L),
+            customQuestions = req.customQuestions.take(15),
             teacherName = activeTeacher?.fullName ?: "Class Teacher",
             teacherCode = activeTeacher?.teacherCode ?: "",
-            dueLabel = "Priority · Complete First",
+            dueLabel = if (isCustomMode) "Custom Teacher Task · Complete First" else "Priority · Complete First",
             pushedAt = nowTime,
             completedByChildIds = emptyList()
         )
@@ -1084,6 +1314,150 @@ class SomaTimeStore private constructor(context: Context) {
         scope.launch {
             FirestoreSyncClient.publishSchoolGradeAssignment(created, targetSchool)
         }
+    }
+
+    private fun encodeAssignments(list: List<TeacherAssignment>): String {
+        val arr = JSONArray()
+        list.forEach { a ->
+            val qArr = JSONArray()
+            a.customQuestions.take(15).forEach { q ->
+                val optsArr = JSONArray().apply { q.options.forEach { put(it) } }
+                val accArr = JSONArray().apply { q.acceptableAnswers.forEach { put(it) } }
+                qArr.put(
+                    JSONObject()
+                        .put("id", q.id)
+                        .put("type", if (q.type == QuestionType.FILL_BLANK) "fill_blank" else "multiple_choice")
+                        .put("prompt", q.prompt)
+                        .put("hint", q.hint)
+                        .put("options", optsArr)
+                        .put("correctAnswer", q.correctAnswer)
+                        .put("acceptableAnswers", accArr)
+                        .put("blankPrefix", q.blankPrefix)
+                        .put("blankSuffix", q.blankSuffix)
+                        .put("explanation", q.explanation)
+                )
+            }
+            val doneArr = JSONArray().apply { a.completedByChildIds.forEach { put(it) } }
+            arr.put(
+                JSONObject()
+                    .put("id", a.id)
+                    .put("classStream", a.classStream)
+                    .put("school", a.school)
+                    .put("grade", a.grade)
+                    .put("learningArea", a.learningArea.displayName)
+                    .put("strand", a.strand)
+                    .put("subStrand", a.subStrand)
+                    .put("lessonId", a.lessonId)
+                    .put("title", a.title)
+                    .put("isCustom", a.isCustom)
+                    .put("instructions", a.instructions)
+                    .put("attachmentName", a.attachmentName)
+                    .put("attachmentUrl", a.attachmentUrl)
+                    .put("attachmentMimeType", a.attachmentMimeType)
+                    .put("attachmentSizeBytes", a.attachmentSizeBytes)
+                    .put("customQuestions", qArr)
+                    .put("teacherName", a.teacherName)
+                    .put("teacherCode", a.teacherCode)
+                    .put("dueLabel", a.dueLabel)
+                    .put("pushedAt", a.pushedAt)
+                    .put("completedByChildIds", doneArr)
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun decodeAssignments(rawJson: String?): List<TeacherAssignment> {
+        if (rawJson.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(rawJson)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val areaName = o.optString("learningArea", "Mathematics")
+                    val area = LearningArea.entries.firstOrNull { it.displayName == areaName }
+                        ?: LearningArea.MATHEMATICS
+                    val qArr = o.optJSONArray("customQuestions")
+                    val questions = buildList {
+                        if (qArr != null) {
+                            for (j in 0 until minOf(qArr.length(), 15)) {
+                                val qo = qArr.optJSONObject(j) ?: continue
+                                val optsArr = qo.optJSONArray("options")
+                                val opts = buildList {
+                                    if (optsArr != null) {
+                                        for (k in 0 until optsArr.length()) {
+                                            val v = optsArr.optString(k)
+                                            if (v.isNotEmpty()) add(v)
+                                        }
+                                    }
+                                }
+                                val accArr = qo.optJSONArray("acceptableAnswers")
+                                val acc = buildList {
+                                    if (accArr != null) {
+                                        for (k in 0 until accArr.length()) {
+                                            val v = accArr.optString(k)
+                                            if (v.isNotEmpty()) add(v)
+                                        }
+                                    }
+                                }
+                                add(
+                                    QuizQuestion(
+                                        id = qo.optString("id", "tq-$j"),
+                                        type = if (qo.optString("type") == "fill_blank") {
+                                            QuestionType.FILL_BLANK
+                                        } else {
+                                            QuestionType.MULTIPLE_CHOICE
+                                        },
+                                        prompt = qo.optString("prompt"),
+                                        hint = qo.optString("hint", "Read carefully before checking."),
+                                        options = opts,
+                                        correctAnswer = qo.optString("correctAnswer"),
+                                        acceptableAnswers = acc,
+                                        blankPrefix = qo.optString("blankPrefix", ""),
+                                        blankSuffix = qo.optString("blankSuffix", ""),
+                                        explanation = qo.optString("explanation", "")
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    val doneArr = o.optJSONArray("completedByChildIds")
+                    val doneIds = buildList {
+                        if (doneArr != null) {
+                            for (j in 0 until doneArr.length()) {
+                                val v = doneArr.optString(j)
+                                if (v.isNotEmpty()) add(v)
+                            }
+                        }
+                    }
+                    val rawUrl = o.optString("attachmentUrl", "")
+                    add(
+                        TeacherAssignment(
+                            id = o.optString("id"),
+                            classStream = o.optString("classStream"),
+                            school = o.optString("school", "Nairobi Primary School"),
+                            grade = o.optInt("grade", 6).coerceIn(1, 12),
+                            learningArea = area,
+                            strand = o.optString("strand", "Teacher Custom Task"),
+                            subStrand = o.optString("subStrand", "Custom Worksheet"),
+                            lessonId = o.optString("lessonId"),
+                            title = o.optString("title"),
+                            isCustom = o.optBoolean("isCustom", false) || questions.isNotEmpty(),
+                            instructions = o.optString("instructions", ""),
+                            attachmentName = o.optString("attachmentName", ""),
+                            attachmentUrl = if (AssignmentUploadParser.isSafeAttachmentUrl(rawUrl)) rawUrl else "",
+                            attachmentMimeType = o.optString("attachmentMimeType", ""),
+                            attachmentSizeBytes = o.optLong("attachmentSizeBytes", 0L),
+                            customQuestions = questions,
+                            teacherName = o.optString("teacherName", "Class Teacher"),
+                            teacherCode = o.optString("teacherCode", ""),
+                            dueLabel = o.optString("dueLabel", "Priority · Complete First"),
+                            pushedAt = o.optString("pushedAt", "Today"),
+                            completedByChildIds = doneIds
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
     }
 
     fun setGuardServiceRunning(running: Boolean) {

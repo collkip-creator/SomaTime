@@ -99,7 +99,14 @@ data class CBCLesson(
     val subStrand: String,
     val durationMins: Int,
     val summary: String,
-    val questions: List<QuizQuestion>
+    val questions: List<QuizQuestion>,
+    val assignmentId: String? = null,
+    val isCustom: Boolean = false,
+    val instructions: String = "",
+    val attachmentName: String = "",
+    val attachmentUrl: String = "",
+    val attachmentMimeType: String = "",
+    val attachmentSizeBytes: Long = 0L
 )
 
 data class CbcCatalogEntry(
@@ -154,7 +161,11 @@ data class ChildProfile(
     val pendingApprovals: List<PendingApproval>,
     val activityLogs: List<ChildActivityLog>,
     val rubricByArea: Map<LearningArea, CBCRubric>,
-    val streakDays: Int
+    val streakDays: Int,
+    val licenseActive: Boolean = false,
+    val licensePlanLabel: String = "Monthly Child Guard · KES 30/mo",
+    val licenseExpiresAt: String? = null,
+    val licensePaymentRef: String? = null
 )
 
 data class TeacherAccount(
@@ -178,6 +189,13 @@ data class TeacherAssignment(
     val subStrand: String,
     val lessonId: String,
     val title: String,
+    val isCustom: Boolean = false,
+    val instructions: String = "",
+    val attachmentName: String = "",
+    val attachmentUrl: String = "",
+    val attachmentMimeType: String = "",
+    val attachmentSizeBytes: Long = 0L,
+    val customQuestions: List<QuizQuestion> = emptyList(),
     val teacherName: String = "Class Teacher",
     val teacherCode: String = "",
     val dueLabel: String,

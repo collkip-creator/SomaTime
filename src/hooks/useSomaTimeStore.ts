@@ -5,7 +5,10 @@ import {
   INITIAL_ASSIGNMENTS,
   INITIAL_CHILDREN,
   INITIAL_CLASS_ROSTER,
+  MONTHLY_LICENSE_KES,
+  MONTHLY_LICENSE_PLAN_LABEL,
   PARENT_PIN,
+  buildLicenseExpiryIso,
   generatePairingCode,
   generateTeacherCode,
 } from '../data/cbcCurriculum';
@@ -23,6 +26,7 @@ import {
   type CloudPairingDoc,
 } from '../lib/firebase';
 import type {
+  ActivityQuestion,
   CBCLesson,
   CBCRubric,
   ChildProfile,
@@ -86,7 +90,14 @@ function loadState(): PersistedState {
       parentAccount: parsed.parentAccount ?? getDefaultState().parentAccount,
       teacherAccount: parsed.teacherAccount ?? null,
       registeredTeachers: Array.isArray(parsed.registeredTeachers) ? parsed.registeredTeachers : [],
-      children: parsed.children,
+      children: parsed.children.map((c) => ({
+        ...c,
+        licenseActive: c.licenseActive ?? (c.id === 'brian'),
+        licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+        licenseExpiresAt:
+          c.licenseExpiresAt ?? (c.id === 'brian' ? buildLicenseExpiryIso(30) : null),
+        licensePaymentRef: c.licensePaymentRef ?? (c.id === 'brian' ? 'MPESA-SOMA8009' : null),
+      })),
       assignments: parsed.assignments ?? INITIAL_ASSIGNMENTS,
       classRoster: parsed.classRoster ?? INITIAL_CLASS_ROSTER,
       displayedKeysByChild: parsed.displayedKeysByChild ?? {},
@@ -145,6 +156,10 @@ function cloudDocToChildProfile(
       English: 'ME',
     },
     streakDays: existing?.streakDays ?? 1,
+    licenseActive: cloud.licenseActive ?? existing?.licenseActive ?? false,
+    licensePlanLabel: existing?.licensePlanLabel ?? MONTHLY_LICENSE_PLAN_LABEL,
+    licenseExpiresAt: cloud.licenseExpiresAt || existing?.licenseExpiresAt || null,
+    licensePaymentRef: cloud.licensePaymentRef || existing?.licensePaymentRef || null,
   };
 }
 
@@ -227,6 +242,7 @@ export function useSomaTimeStore() {
             current.usedScreenTodayMins === cloud.usedScreenTodayMins &&
             current.learnedMinutesToday === cloud.learnedMinutesToday &&
             current.requireParentApproval === cloud.requireParentApproval &&
+            current.licenseActive === (cloud.licenseActive ?? current.licenseActive) &&
             Math.abs(current.availableScreenSeconds - cloud.availableScreenSeconds) <= 2 &&
             prev.parentAccount.pin === cloud.parentPin;
 
@@ -372,7 +388,109 @@ export function useSomaTimeStore() {
     []
   );
 
+  const updateParentPin = useCallback((newPin: string): boolean => {
+    const clean = newPin.replace(/\D/g, '').slice(0, 4);
+    if (clean.length !== 4) return false;
+
+    const currentChildren = stateRef.current.children;
+    setState((prev) => ({
+      ...prev,
+      parentAccount: {
+        ...prev.parentAccount,
+        pin: clean,
+        registered: true,
+      },
+    }));
+
+    currentChildren.forEach((child) => {
+      void publishPairingToCloud(child, clean).catch(() => {});
+    });
+    return true;
+  }, []);
+
+  const activateChildLicense = useCallback(
+    (
+      childId: string,
+      payerPhone?: string,
+      explicitReceiptRef?: string
+    ): { ok: boolean; receiptRef: string; expiresAt: string } => {
+      const expiresAt = buildLicenseExpiryIso(30);
+      const token = Math.random().toString(36).slice(2, 6).toUpperCase();
+      const suffix = (payerPhone || '').replace(/\D/g, '').slice(-4) || token;
+      const receiptRef = (explicitReceiptRef || `MPESA-${suffix}${token}`).slice(0, 24);
+
+      let updatedTarget: ChildProfile | null = null;
+      setState((prev) => ({
+        ...prev,
+        children: prev.children.map((c) => {
+          if (c.id !== childId) return c;
+          updatedTarget = {
+            ...c,
+            licenseActive: true,
+            licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+            licenseExpiresAt: expiresAt,
+            licensePaymentRef: receiptRef,
+          };
+          return updatedTarget;
+        }),
+      }));
+
+      if (updatedTarget) {
+        void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin)
+          .then(() => {
+            setCloudSyncOk(true);
+            setCloudSyncMessage(
+              `M-Pesa License active (${receiptRef}) ✓ · Code ${(updatedTarget as ChildProfile).pairingCode} ready for learner phone`
+            );
+          })
+          .catch(() => {});
+      }
+
+      return { ok: true, receiptRef, expiresAt };
+    },
+    []
+  );
+
+  const activateAllUnpaidLicenses = useCallback(
+    (payerPhone?: string, explicitReceiptRef?: string): number => {
+      const unpaid = stateRef.current.children.filter((c) => !c.licenseActive);
+      if (unpaid.length === 0) return 0;
+
+      const expiresAt = buildLicenseExpiryIso(30);
+      const token = Math.random().toString(36).slice(2, 6).toUpperCase();
+      const suffix = (payerPhone || '').replace(/\D/g, '').slice(-4) || token;
+      const receiptRef = (explicitReceiptRef || `MPESA-FAM${suffix}`).slice(0, 24);
+
+      const updatedList: ChildProfile[] = [];
+      setState((prev) => ({
+        ...prev,
+        children: prev.children.map((c) => {
+          if (c.licenseActive) return c;
+          const next = {
+            ...c,
+            licenseActive: true,
+            licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+            licenseExpiresAt: expiresAt,
+            licensePaymentRef: receiptRef,
+          };
+          updatedList.push(next);
+          return next;
+        }),
+      }));
+
+      updatedList.forEach((child) => {
+        void publishPairingToCloud(child, stateRef.current.parentAccount.pin).catch(() => {});
+      });
+
+      return unpaid.length;
+    },
+    []
+  );
+
   const regeneratePairingCode = useCallback((childId: string) => {
+    const target = stateRef.current.children.find((c) => c.id === childId);
+    if (!target || !target.licenseActive) return null;
+
     const nextCode = generatePairingCode();
     let updatedTarget: ChildProfile | null = null;
     setState((prev) => ({
@@ -440,6 +558,10 @@ export function useSomaTimeStore() {
           English: 'ME',
         },
         streakDays: 1,
+        licenseActive: false,
+        licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+        licenseExpiresAt: null,
+        licensePaymentRef: null,
       };
 
       setState((prev) => ({
@@ -457,7 +579,9 @@ export function useSomaTimeStore() {
 
       await publishPairingToCloud(newChild, validPin);
       setCloudSyncOk(true);
-      setCloudSyncMessage(`Synced to Cloud ✓ · Code ${code} ready for learner phone`);
+      setCloudSyncMessage(
+        `Profile saved ✓ · Pay KES ${MONTHLY_LICENSE_KES}/mo via M-Pesa on Parents tab to unlock pairing for ${newChild.name}`
+      );
       return newChild;
     },
     []
@@ -484,6 +608,12 @@ export function useSomaTimeStore() {
       }
 
       if (cloudMatch) {
+        if (cloudMatch.licenseActive === false) {
+          return {
+            success: false,
+            message: `Monthly child license for ${cloudMatch.childName} is inactive. Ask your parent to pay KES ${MONTHLY_LICENSE_KES}/mo via M-Pesa in the Parents Licensing Area to activate this pairing code.`,
+          };
+        }
         const existingLocal = stateRef.current.children.find(
           (c) =>
             c.id === cloudMatch.childId ||
@@ -526,6 +656,12 @@ export function useSomaTimeStore() {
           message: cloudLookupError
             ? `Cloud lookup failed for "${normalized}". Check internet connection and retry.`
             : `No child profile matches "${normalized}". Verify the code shown on your parent's phone (make sure the parent phone has synced to cloud).`,
+        };
+      }
+      if (!matched.licenseActive) {
+        return {
+          success: false,
+          message: `Monthly license for ${matched.name} is unpaid. Pay KES ${MONTHLY_LICENSE_KES}/mo via M-Pesa on the Parents tab first to unlock pairing.`,
         };
       }
 
@@ -592,6 +728,10 @@ export function useSomaTimeStore() {
           Kiswahili: 'ME',
         },
         streakDays: 1,
+        licenseActive: false,
+        licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+        licenseExpiresAt: null,
+        licensePaymentRef: null,
       };
       setState((prev) => ({
         ...prev,
@@ -603,7 +743,10 @@ export function useSomaTimeStore() {
     []
   );
 
-  const activateHandOffMode = useCallback((childId: string) => {
+  const activateHandOffMode = useCallback((childId: string): boolean => {
+    const target = stateRef.current.children.find((c) => c.id === childId);
+    if (!target || !target.licenseActive) return false;
+
     let updatedTarget: ChildProfile | null = null;
     setState((prev) => ({
       ...prev,
@@ -629,6 +772,7 @@ export function useSomaTimeStore() {
         () => {}
       );
     }
+    return true;
   }, []);
 
   const exitHandOffToParent = useCallback(() => {
@@ -833,7 +977,7 @@ export function useSomaTimeStore() {
         });
 
         const nextAssignments = prev.assignments.map((assign) => {
-          if (assign.lessonId === lesson.id) {
+          if (assign.id === lesson.assignmentId || assign.lessonId === lesson.id) {
             return assign.completedByChildIds.includes(childId)
               ? assign
               : { ...assign, completedByChildIds: [...assign.completedByChildIds, childId] };
@@ -1039,6 +1183,14 @@ export function useSomaTimeStore() {
       learningArea: LearningArea;
       strand: string;
       subStrand: string;
+      isCustom?: boolean;
+      customTitle?: string;
+      instructions?: string;
+      attachmentName?: string;
+      attachmentUrl?: string;
+      attachmentMimeType?: string;
+      attachmentSizeBytes?: number;
+      customQuestions?: ActivityQuestion[];
     }) => {
       const activeTeacher = stateRef.current.teacherAccount;
       const targetSchool =
@@ -1055,19 +1207,36 @@ export function useSomaTimeStore() {
         CBC_LESSONS.find((l) => l.learningArea === input.learningArea) ??
         CBC_LESSONS[0];
 
+      const assignId = `assign-${Date.now()}`;
+      const hasCustomQuestions =
+        Array.isArray(input.customQuestions) && input.customQuestions.length > 0;
+      const isCustom =
+        Boolean(input.isCustom) ||
+        hasCustomQuestions ||
+        Boolean(input.attachmentUrl || input.attachmentName);
+
       const newAssignment: TeacherAssignment = {
-        id: `assign-${Date.now()}`,
+        id: assignId,
         classStream: input.classStream,
         school: targetSchool,
         grade: input.grade,
         learningArea: input.learningArea,
         strand: input.strand,
         subStrand: input.subStrand,
-        lessonId: matchingLesson.id,
-        title: `${input.subStrand} (${matchingLesson.title})`,
+        lessonId: isCustom ? `custom-${assignId}` : matchingLesson.id,
+        title: isCustom
+          ? input.customTitle?.trim() || `${input.subStrand} · Custom Assignment`
+          : `${input.subStrand} (${matchingLesson.title})`,
+        isCustom,
+        instructions: input.instructions?.trim() || undefined,
+        attachmentName: input.attachmentName?.trim() || undefined,
+        attachmentUrl: input.attachmentUrl?.trim() || undefined,
+        attachmentMimeType: input.attachmentMimeType?.trim() || undefined,
+        attachmentSizeBytes: input.attachmentSizeBytes,
+        customQuestions: hasCustomQuestions ? input.customQuestions : undefined,
         teacherName: activeTeacher?.fullName || 'Class Teacher',
         teacherCode: activeTeacher?.teacherCode,
-        dueLabel: 'Priority · Before Screen Time',
+        dueLabel: isCustom ? 'Custom Teacher Task · Priority' : 'Priority · Before Screen Time',
         pushedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         completedByChildIds: [],
       };
@@ -1113,6 +1282,9 @@ export function useSomaTimeStore() {
     retryCloudSyncNow,
     setRoleView,
     setSelectedChildId,
+    updateParentPin,
+    activateChildLicense,
+    activateAllUnpaidLicenses,
     updateChildSettings,
     regeneratePairingCode,
     registerParentAndChild,

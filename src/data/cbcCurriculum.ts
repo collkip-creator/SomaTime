@@ -920,6 +920,79 @@ export function scaleLessonQuestionsForGrade(lesson: CBCLesson, grade: number): 
   return buildGradeScaledLesson(lesson, grade, CBC_LESSONS, getLevelGroupForGrade(grade));
 }
 
+export function buildLessonFromTeacherAssignment(
+  assign: TeacherAssignment,
+  learnerGrade: number
+): CBCLesson {
+  const base =
+    CBC_LESSONS.find((l) => l.id === assign.lessonId) ??
+    CBC_LESSONS.find((l) => l.grade === learnerGrade && l.learningArea === assign.learningArea) ??
+    CBC_LESSONS.find((l) => l.learningArea === assign.learningArea) ??
+    CBC_LESSONS[0];
+
+  const hasCustomQuestions =
+    Array.isArray(assign.customQuestions) && assign.customQuestions.length > 0;
+  const hasAttachment = Boolean(assign.attachmentUrl || assign.attachmentName);
+
+  if (assign.isCustom || hasCustomQuestions || hasAttachment) {
+    const fallbackWorksheetQuestion = {
+      id: `${assign.id}-ws-1`,
+      type: 'multiple_choice' as const,
+      prompt: `Have you reviewed ${
+        assign.attachmentName
+          ? `your teacher's uploaded material ("${assign.attachmentName}")`
+          : `"${assign.title}"`
+      } and completed the task instructions?`,
+      bilingualHint:
+        assign.instructions?.trim() ||
+        'Open the uploaded material above, follow your teacher’s notes, then confirm completion.',
+      options: [
+        'Yes, I reviewed the material and completed the task',
+        'I still need to read the teacher instructions',
+      ],
+      correctAnswer: 'Yes, I reviewed the material and completed the task',
+      explanation: `Great work completing ${assign.teacherName || 'your teacher'}'s custom assignment!`,
+    };
+
+    return {
+      id: assign.lessonId,
+      assignmentId: assign.id,
+      isCustom: true,
+      title: assign.title,
+      swahiliTitle: assign.title,
+      grade: assign.grade,
+      levelGroup: getLevelGroupForGrade(assign.grade),
+      learningArea: assign.learningArea,
+      strand: assign.strand,
+      subStrand: assign.subStrand,
+      durationMins: 5,
+      summary:
+        assign.instructions?.trim() ||
+        `Custom ${assign.learningArea} assignment from ${assign.teacherName || 'Class Teacher'}.`,
+      instructions: assign.instructions,
+      attachmentName: assign.attachmentName,
+      attachmentUrl: assign.attachmentUrl,
+      attachmentMimeType: assign.attachmentMimeType,
+      attachmentSizeBytes: assign.attachmentSizeBytes,
+      questions: hasCustomQuestions ? assign.customQuestions! : [fallbackWorksheetQuestion],
+    };
+  }
+
+  const contextual: CBCLesson = {
+    ...base,
+    assignmentId: assign.id,
+    title: assign.title || `${assign.subStrand} (${base.title})`,
+    swahiliTitle: assign.title || base.swahiliTitle,
+    grade: assign.grade,
+    levelGroup: getLevelGroupForGrade(assign.grade),
+    learningArea: assign.learningArea,
+    strand: assign.strand,
+    subStrand: assign.subStrand,
+  };
+
+  return scaleLessonQuestionsForGrade(contextual, learnerGrade);
+}
+
 export function pickNextUnseenAssignment(params: {
   child: ChildProfile;
   pendingAssignments: TeacherAssignment[];
@@ -943,29 +1016,13 @@ export function pickNextUnseenAssignment(params: {
           : pendingAssignments;
 
     const chosen = pool[Math.floor(Math.random() * pool.length)];
-    const base =
-      CBC_LESSONS.find((l) => l.id === chosen.lessonId) ??
-      CBC_LESSONS.find((l) => l.grade === learnerGrade && l.learningArea === chosen.learningArea) ??
-      CBC_LESSONS.find((l) => l.learningArea === chosen.learningArea) ??
-      CBC_LESSONS[0];
-
-    // Keep base.id so completeLesson marks the TeacherAssignment completed cleanly
-    const contextual: CBCLesson = {
-      ...base,
-      title: chosen.title || `${chosen.subStrand} (${base.title})`,
-      swahiliTitle: chosen.title || base.swahiliTitle,
-      grade: chosen.grade,
-      levelGroup: getLevelGroupForGrade(chosen.grade),
-      learningArea: chosen.learningArea,
-      strand: chosen.strand,
-      subStrand: chosen.subStrand,
-    };
+    const builtLesson = buildLessonFromTeacherAssignment(chosen, learnerGrade);
 
     return {
-      lesson: scaleLessonQuestionsForGrade(contextual, learnerGrade),
+      lesson: builtLesson,
       isPriority: true,
       trackingKey: `assign:${chosen.id}`,
-      quizId: base.id,
+      quizId: chosen.lessonId,
       wrappedCycle: false,
     };
   }
@@ -1056,6 +1113,14 @@ export function pickNextUnseenAssignment(params: {
   };
 }
 
+export const MONTHLY_LICENSE_KES = 30;
+export const MONTHLY_LICENSE_PLAN_LABEL = 'Monthly Child Guard · KES 30/mo';
+
+export function buildLicenseExpiryIso(daysFromNow = 30): string {
+  const dt = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000);
+  return dt.toISOString().slice(0, 10);
+}
+
 export const INITIAL_CHILDREN: ChildProfile[] = [
   {
     id: 'amina',
@@ -1101,6 +1166,10 @@ export const INITIAL_CHILDREN: ChildProfile[] = [
       'Agriculture & Nutrition': 'ME',
     },
     streakDays: 5,
+    licenseActive: false,
+    licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+    licenseExpiresAt: null,
+    licensePaymentRef: null,
   },
   {
     id: 'brian',
@@ -1154,6 +1223,10 @@ export const INITIAL_CHILDREN: ChildProfile[] = [
       'Social Studies': 'ME',
     },
     streakDays: 9,
+    licenseActive: true,
+    licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+    licenseExpiresAt: buildLicenseExpiryIso(30),
+    licensePaymentRef: 'MPESA-SOMA8009',
   },
 ];
 

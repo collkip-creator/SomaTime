@@ -4,6 +4,8 @@ import {
   Award,
   CheckCircle2,
   Clock,
+  ExternalLink,
+  FileText,
   HelpCircle,
   KeyRound,
   ShieldCheck,
@@ -11,6 +13,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import type { CBCLesson, CBCRubric } from '../types/somatime';
+import { formatFileSize, isSafeAttachmentUrl } from '../utils/assignmentParser';
 
 interface LessonPlayerProps {
   lesson: CBCLesson;
@@ -54,6 +57,7 @@ export function LessonPlayer({
   const [submittedCurrent, setSubmittedCurrent] = useState(false);
   const [isCorrectCurrent, setIsCorrectCurrent] = useState(false);
   const [correctCount, setCorrectCount] = useState(0);
+  const [attachmentImgError, setAttachmentImgError] = useState(false);
   const [rewardSummary, setRewardSummary] = useState<{
     scorePercent: number;
     minutesEarned: number;
@@ -287,6 +291,61 @@ export function LessonPlayer({
           />
         </div>
       </div>
+
+      {/* Teacher Custom Instructions & Uploaded Worksheet */}
+      {(lesson.instructions || (lesson.attachmentUrl && isSafeAttachmentUrl(lesson.attachmentUrl))) && (
+        <div className="mt-4 space-y-3 rounded-2xl border border-teal-200 bg-teal-50/60 p-4 text-xs">
+          {lesson.instructions && (
+            <div>
+              <p className="font-bold text-teal-900">Teacher Instructions</p>
+              <p className="mt-1 leading-relaxed text-slate-800">{lesson.instructions}</p>
+            </div>
+          )}
+
+          {lesson.attachmentUrl && isSafeAttachmentUrl(lesson.attachmentUrl) && (
+            <div className="space-y-2 rounded-xl border border-teal-200 bg-white p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <FileText className="h-4 w-4 text-teal-700 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-slate-900">
+                      {lesson.attachmentName || 'Uploaded Assignment Material'}
+                    </p>
+                    {lesson.attachmentSizeBytes ? (
+                      <p className="text-[11px] text-slate-500">
+                        {formatFileSize(lesson.attachmentSizeBytes)}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+                <a
+                  href={lesson.attachmentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg bg-teal-700 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-teal-800 whitespace-nowrap"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>Open Material</span>
+                </a>
+              </div>
+
+              {(lesson.attachmentMimeType?.startsWith('image/') ||
+                /\.(png|jpe?g|webp)$/i.test(lesson.attachmentName || lesson.attachmentUrl)) &&
+                !attachmentImgError && (
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                    <img
+                      src={lesson.attachmentUrl}
+                      alt={lesson.attachmentName || 'Teacher uploaded worksheet image'}
+                      referrerPolicy="no-referrer"
+                      onError={() => setAttachmentImgError(true)}
+                      className="max-h-64 w-full object-contain"
+                    />
+                  </div>
+                )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Question Stage */}
       <div className="mt-6">
