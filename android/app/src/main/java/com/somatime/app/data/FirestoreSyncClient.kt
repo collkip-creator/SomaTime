@@ -121,7 +121,16 @@ object FirestoreSyncClient {
             }
 
             val existing = existingRes.data
-            val fields = buildFieldsJson(child, parentPin, includeImmutable = existing == null)
+            val effectiveChild = if (existing != null && existing.licenseActive && !child.licenseActive) {
+                child.copy(
+                    licenseActive = true,
+                    licenseExpiresAt = existing.licenseExpiresAt.ifBlank { child.licenseExpiresAt },
+                    licensePaymentRef = existing.licensePaymentRef.ifBlank { child.licensePaymentRef }
+                )
+            } else {
+                child
+            }
+            val fields = buildFieldsJson(effectiveChild, parentPin, includeImmutable = existing == null)
             val body = JSONObject().put("fields", fields).toString()
 
             val res = if (existing == null) {

@@ -179,9 +179,34 @@ class SomaTimeStore private constructor(context: Context) {
         }
         val safePin = current.parentPin.ifEmpty { CbcCurriculumRepository.PARENT_PIN }
         scope.launch {
+            // Pull down any active Cloud licenses first so updates never overwrite paid status
+            val restoredIds = mutableSetOf<String>()
+            val mergedChildren = current.children.map { child ->
+                val fetched = FirestoreSyncClient.fetchPairingSession(child.pairingCode).data
+                if (fetched != null && fetched.licenseActive && !child.licenseActive) {
+                    restoredIds.add(child.id)
+                    child.copy(
+                        licenseActive = true,
+                        licenseExpiresAt = fetched.licenseExpiresAt.ifEmpty { child.licenseExpiresAt },
+                        licensePaymentRef = fetched.licensePaymentRef.ifEmpty { child.licensePaymentRef }
+                    )
+                } else {
+                    child
+                }
+            }
+            if (restoredIds.isNotEmpty()) {
+                _state.update { s ->
+                    s.copy(
+                        children = s.children.map { cur ->
+                            mergedChildren.firstOrNull { it.id == cur.id } ?: cur
+                        }
+                    ).also(::persistState)
+                }
+            }
+
             var allOk = true
             var lastErr = ""
-            current.children.forEach { child ->
+            _state.value.children.forEach { child ->
                 val res = FirestoreSyncClient.publishPairingSession(child, safePin)
                 if (!res.ok) {
                     allOk = false
@@ -201,11 +226,67 @@ class SomaTimeStore private constructor(context: Context) {
         }
     }
 
-    private fun loadInitialState(): SomaTimeUiState {
-        // Clear legacy v2 prefs once so all old test accounts/data are wiped on upgrade
+    private fun migrateLegacyV2PaidLicensesIfNeeded() {
+        if (prefs.getInt("prefs_schema_version", 0) >= PREFS_SCHEMA_VERSION) return
         runCatching {
-            appContext.getSharedPreferences(LEGACY_PREFS_V2, Context.MODE_PRIVATE).edit().clear().apply()
+            val legacy = appContext.getSharedPreferences(LEGACY_PREFS_V2, Context.MODE_PRIVATE)
+            if (legacy.all.isEmpty()) {
+                prefs.edit().putInt("prefs_schema_version", PREFS_SCHEMA_VERSION).apply()
+                return
+            }
+            val alreadyHasV3Data = prefs.contains("parent_pin") ||
+                !(prefs.getStringSet("custom_child_ids", emptySet()).isNullOrEmpty())
+            if (!alreadyHasV3Data) {
+                val legacyCustomIds = legacy.getStringSet("custom_child_ids", emptySet()) ?: emptySet()
+                val candidateIds = (legacyCustomIds + setOf("amina", "brian")).distinct()
+                val paidIds = candidateIds.filter { id ->
+                    legacy.getBoolean("child_${id}_license_active", false)
+                }
+                if (paidIds.isNotEmpty()) {
+                    val editor = prefs.edit()
+                    legacy.getString("parent_name", null)?.let { editor.putString("parent_name", it) }
+                    legacy.getString("parent_contact", null)?.let { editor.putString("parent_contact", it) }
+                    legacy.getString("parent_pin", null)?.let { editor.putString("parent_pin", it) }
+                    editor.putStringSet("custom_child_ids", paidIds.toSet())
+                    paidIds.forEach { id ->
+                        val prefix = "child_${id}_"
+                        val defaultName = when (id) {
+                            "amina" -> "Amina Wanjiku"
+                            "brian" -> "Brian Kiprop"
+                            else -> "Learner"
+                        }
+                        editor.putString("${prefix}name", legacy.getString("${prefix}name", defaultName))
+                        editor.putInt("${prefix}grade", legacy.getInt("${prefix}grade", 5))
+                        editor.putString("${prefix}school", legacy.getString("${prefix}school", "Nairobi Primary School"))
+                        editor.putInt("${prefix}secs", legacy.getInt("${prefix}secs", 300))
+                        editor.putInt("${prefix}used", legacy.getInt("${prefix}used", 0))
+                        editor.putInt("${prefix}learned", legacy.getInt("${prefix}learned", 0))
+                        editor.putInt("${prefix}cap", legacy.getInt("${prefix}cap", 90))
+                        editor.putInt("${prefix}rate", legacy.getInt("${prefix}rate", 15))
+                        editor.putBoolean("${prefix}approval", legacy.getBoolean("${prefix}approval", false))
+                        editor.putBoolean("${prefix}locked", legacy.getBoolean("${prefix}locked", false))
+                        editor.putBoolean("${prefix}paired", legacy.getBoolean("${prefix}paired", false))
+                        legacy.getString("${prefix}code", null)?.let { editor.putString("${prefix}code", it) }
+                        editor.putBoolean("${prefix}license_active", true)
+                        legacy.getString("${prefix}license_expires_at", null)?.let {
+                            editor.putString("${prefix}license_expires_at", it)
+                        }
+                        legacy.getString("${prefix}license_payment_ref", null)?.let {
+                            editor.putString("${prefix}license_payment_ref", it)
+                        }
+                    }
+                    editor.putInt("prefs_schema_version", PREFS_SCHEMA_VERSION)
+                    editor.apply()
+                }
+            }
+            legacy.edit().clear().apply()
         }
+        prefs.edit().putInt("prefs_schema_version", PREFS_SCHEMA_VERSION).apply()
+    }
+
+    private fun loadInitialState(): SomaTimeUiState {
+        // Safely migrate any active paid licenses from v2 before clearing legacy demo prefs; never clear v3 prefs
+        migrateLegacyV2PaidLicensesIfNeeded()
 
         val savedServerUrl = prefs.getString("server_base_url", null)
         if (!savedServerUrl.isNullOrBlank()) {
@@ -246,16 +327,34 @@ class SomaTimeStore private constructor(context: Context) {
             if (!prefs.contains("${prefix}secs")) return@map child
             val savedCodesJson = prefs.getString("${prefix}linked_teacher_codes_json", null)
             val savedTeachersJson = prefs.getString("${prefix}linked_teachers_json", null)
+            val savedMandatoryJson = prefs.getString("${prefix}mandatory_subjects_json", null)
+            val savedCompletedJson = prefs.getString("${prefix}completed_lessons_json", null)
+            val savedMode = prefs.getString("${prefix}device_mode", null)?.let {
+                runCatching { DeviceMode.valueOf(it) }.getOrNull()
+            } ?: child.deviceMode
             child.copy(
+                deviceMode = savedMode,
                 availableScreenSeconds = prefs.getInt("${prefix}secs", child.availableScreenSeconds),
                 usedScreenTodayMins = prefs.getInt("${prefix}used", child.usedScreenTodayMins),
                 learnedMinutesToday = prefs.getInt("${prefix}learned", child.learnedMinutesToday),
                 dailyCapMins = prefs.getInt("${prefix}cap", child.dailyCapMins),
                 exchangeRateMins = prefs.getInt("${prefix}rate", child.exchangeRateMins),
+                mandatorySubjects = if (savedMandatoryJson != null) {
+                    decodeStringList(savedMandatoryJson).mapNotNull { label ->
+                        LearningArea.entries.firstOrNull { it.displayName == label }
+                    }.ifEmpty { child.mandatorySubjects }
+                } else {
+                    child.mandatorySubjects
+                },
                 requireParentApproval = prefs.getBoolean("${prefix}approval", child.requireParentApproval),
                 isLocked = prefs.getBoolean("${prefix}locked", child.isLocked),
                 isPaired = prefs.getBoolean("${prefix}paired", child.isPaired),
                 pairingCode = prefs.getString("${prefix}code", child.pairingCode) ?: child.pairingCode,
+                completedLessonIds = if (savedCompletedJson != null) {
+                    decodeStringList(savedCompletedJson)
+                } else {
+                    child.completedLessonIds
+                },
                 licenseActive = prefs.getBoolean("${prefix}license_active", child.licenseActive),
                 licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
                 licenseExpiresAt = prefs.getString("${prefix}license_expires_at", child.licenseExpiresAt),
@@ -270,11 +369,23 @@ class SomaTimeStore private constructor(context: Context) {
             val name = prefs.getString("${prefix}name", null) ?: return@mapNotNull null
             val grade = prefs.getInt("${prefix}grade", 5)
             val school = prefs.getString("${prefix}school", "Nairobi Primary School") ?: "Nairobi Primary School"
-            val mandatory = if (grade >= 7) {
+            val defaultMandatory = if (grade >= 7) {
                 listOf(LearningArea.MATHEMATICS, LearningArea.INTEGRATED_SCIENCE)
             } else {
                 listOf(LearningArea.MATHEMATICS, LearningArea.KISWAHILI)
             }
+            val savedMandatoryJson = prefs.getString("${prefix}mandatory_subjects_json", null)
+            val mandatory = if (savedMandatoryJson != null) {
+                decodeStringList(savedMandatoryJson).mapNotNull { label ->
+                    LearningArea.entries.firstOrNull { it.displayName == label }
+                }.ifEmpty { defaultMandatory }
+            } else {
+                defaultMandatory
+            }
+            val savedMode = prefs.getString("${prefix}device_mode", null)?.let {
+                runCatching { DeviceMode.valueOf(it) }.getOrNull()
+            } ?: DeviceMode.OWN_PHONE
+            val savedCompleted = decodeStringList(prefs.getString("${prefix}completed_lessons_json", null))
             val savedCodes = decodeStringList(prefs.getString("${prefix}linked_teacher_codes_json", null))
             val savedTeachers = decodeLinkedTeachers(prefs.getString("${prefix}linked_teachers_json", null))
             ChildProfile(
@@ -282,8 +393,8 @@ class SomaTimeStore private constructor(context: Context) {
                 name = name,
                 grade = grade,
                 school = school,
-                classStream = "Grade $grade East",
-                deviceMode = DeviceMode.OWN_PHONE,
+                classStream = prefs.getString("${prefix}class_stream", null) ?: "Grade $grade East",
+                deviceMode = savedMode,
                 pairingCode = prefs.getString("${prefix}code", CbcCurriculumRepository.generatePairingCode())
                     ?: CbcCurriculumRepository.generatePairingCode(),
                 isPaired = prefs.getBoolean("${prefix}paired", false),
@@ -295,7 +406,7 @@ class SomaTimeStore private constructor(context: Context) {
                 usedScreenTodayMins = prefs.getInt("${prefix}used", 0),
                 learnedMinutesToday = prefs.getInt("${prefix}learned", 0),
                 isLocked = prefs.getBoolean("${prefix}locked", false),
-                completedLessonIds = emptyList(),
+                completedLessonIds = savedCompleted,
                 pendingApprovals = emptyList(),
                 activityLogs = emptyList(),
                 rubricByArea = mapOf(LearningArea.MATHEMATICS to CBCRubric.ME),
@@ -515,21 +626,26 @@ class SomaTimeStore private constructor(context: Context) {
             editor.putString("${prefix}name", c.name)
             editor.putInt("${prefix}grade", c.grade)
             editor.putString("${prefix}school", c.school)
+            editor.putString("${prefix}class_stream", c.classStream)
+            editor.putString("${prefix}device_mode", c.deviceMode.name)
             editor.putInt("${prefix}secs", c.availableScreenSeconds)
             editor.putInt("${prefix}used", c.usedScreenTodayMins)
             editor.putInt("${prefix}learned", c.learnedMinutesToday)
             editor.putInt("${prefix}cap", c.dailyCapMins)
             editor.putInt("${prefix}rate", c.exchangeRateMins)
+            editor.putString("${prefix}mandatory_subjects_json", encodeStringList(c.mandatorySubjects.map { it.displayName }))
             editor.putBoolean("${prefix}approval", c.requireParentApproval)
             editor.putBoolean("${prefix}locked", c.isLocked)
             editor.putBoolean("${prefix}paired", c.isPaired)
             editor.putString("${prefix}code", c.pairingCode)
+            editor.putString("${prefix}completed_lessons_json", encodeStringList(c.completedLessonIds))
             editor.putBoolean("${prefix}license_active", c.licenseActive)
             editor.putString("${prefix}license_expires_at", c.licenseExpiresAt)
             editor.putString("${prefix}license_payment_ref", c.licensePaymentRef)
             editor.putString("${prefix}linked_teacher_codes_json", encodeStringList(c.linkedTeacherCodes))
             editor.putString("${prefix}linked_teachers_json", encodeLinkedTeachers(c.linkedTeachers))
         }
+        editor.putInt("prefs_schema_version", PREFS_SCHEMA_VERSION)
         editor.apply()
     }
 
@@ -1202,14 +1318,15 @@ class SomaTimeStore private constructor(context: Context) {
                             )
                         }
                     }
+                    val resolvedLicenseActive = child.licenseActive || cloud.licenseActive
                     s.copy(
                         cloudSyncOk = true,
                         cloudSyncMessage = if (cloud.isPaired) {
                             "Synced to Cloud ✓ · Learner phone paired"
-                        } else if (!child.licenseActive) {
+                        } else if (!resolvedLicenseActive) {
                             "Synced to Cloud ✓ · Pay KES ${CbcCurriculumRepository.MONTHLY_LICENSE_KES}/mo license to unlock pairing"
                         } else {
-                            "Synced to Cloud ✓ · Ready for daughter's phone"
+                            "Synced to Cloud ✓ · Ready for learner phone"
                         },
                         children = nextChildren
                     ).also(::persistState)
@@ -1986,6 +2103,7 @@ class SomaTimeStore private constructor(context: Context) {
     companion object {
         private const val PREFS_NAME = "somatime_prefs_v3"
         private const val LEGACY_PREFS_V2 = "somatime_prefs_v2"
+        private const val PREFS_SCHEMA_VERSION = 2
 
         @Volatile
         private var instance: SomaTimeStore? = null

@@ -43,7 +43,10 @@ import type {
 const STORAGE_KEY = 'somatime_fresh_state_v3';
 const LEGACY_STORAGE_KEYS = ['somatime_prototype_state_v2', 'somatime_state_v1'];
 
+const CURRENT_SCHEMA_VERSION = 2;
+
 interface PersistedState {
+  schemaVersion?: number;
   roleView: RoleView;
   selectedChildId: string;
   handOffActive: boolean;
@@ -59,6 +62,7 @@ interface PersistedState {
 
 function getDefaultState(): PersistedState {
   return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     roleView: 'parent',
     selectedChildId: '',
     handOffActive: false,
@@ -80,6 +84,51 @@ function getDefaultState(): PersistedState {
 
 function loadState(): PersistedState {
   try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      // If upgrading from legacy storage that held paid licenses, rescue licensed profiles safely
+      for (const legacyKey of LEGACY_STORAGE_KEYS) {
+        try {
+          const legacyRaw = window.localStorage.getItem(legacyKey);
+          if (!legacyRaw) continue;
+          const legacyParsed = JSON.parse(legacyRaw) as Partial<PersistedState>;
+          const licensedChildren = Array.isArray(legacyParsed?.children)
+            ? legacyParsed.children.filter((c) => Boolean(c?.licenseActive))
+            : [];
+          window.localStorage.removeItem(legacyKey);
+          if (licensedChildren.length > 0) {
+            return {
+              schemaVersion: CURRENT_SCHEMA_VERSION,
+              roleView: legacyParsed.roleView ?? 'parent',
+              selectedChildId: licensedChildren[0]?.id ?? '',
+              handOffActive: Boolean(legacyParsed.handOffActive),
+              parentAccount: legacyParsed.parentAccount ?? getDefaultState().parentAccount,
+              teacherAccount: legacyParsed.teacherAccount ?? null,
+              registeredTeachers: Array.isArray(legacyParsed.registeredTeachers)
+                ? legacyParsed.registeredTeachers
+                : [],
+              children: licensedChildren.map((c) => ({
+                ...c,
+                licenseActive: true,
+                licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
+                licenseExpiresAt: c.licenseExpiresAt ?? null,
+                licensePaymentRef: c.licensePaymentRef ?? null,
+                linkedTeacherCodes: Array.isArray(c.linkedTeacherCodes) ? c.linkedTeacherCodes : [],
+                linkedTeachers: Array.isArray(c.linkedTeachers) ? c.linkedTeachers : [],
+              })),
+              assignments: Array.isArray(legacyParsed.assignments) ? legacyParsed.assignments : [],
+              classRoster: [],
+              displayedKeysByChild: legacyParsed.displayedKeysByChild ?? {},
+              displayedQuizIdsByChild: legacyParsed.displayedQuizIdsByChild ?? {},
+            };
+          }
+        } catch {
+          // Ignore legacy parse errors
+        }
+      }
+      return getDefaultState();
+    }
+
     LEGACY_STORAGE_KEYS.forEach((legacyKey) => {
       try {
         window.localStorage.removeItem(legacyKey);
@@ -87,13 +136,13 @@ function loadState(): PersistedState {
         // Ignore storage errors
       }
     });
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return getDefaultState();
+
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
     if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.children)) {
       return getDefaultState();
     }
     return {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       roleView: parsed.roleView ?? 'parent',
       selectedChildId: parsed.selectedChildId ?? parsed.children[0]?.id ?? '',
       handOffActive: Boolean(parsed.handOffActive),
@@ -167,7 +216,7 @@ function cloudDocToChildProfile(
       English: 'ME',
     },
     streakDays: existing?.streakDays ?? 1,
-    licenseActive: cloud.licenseActive ?? existing?.licenseActive ?? false,
+    licenseActive: Boolean(cloud.licenseActive || existing?.licenseActive),
     licensePlanLabel: existing?.licensePlanLabel ?? MONTHLY_LICENSE_PLAN_LABEL,
     licenseExpiresAt: cloud.licenseExpiresAt || existing?.licenseExpiresAt || null,
     licensePaymentRef: cloud.licensePaymentRef || existing?.licensePaymentRef || null,

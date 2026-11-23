@@ -218,6 +218,8 @@ export async function publishPairingToCloud(
     if (!existingSnap.exists()) {
       await setDoc(docRef, payload);
     } else {
+      const existingData = existingSnap.data() as Partial<CloudPairingDoc> | undefined;
+      const preserveCloudLicense = Boolean(existingData?.licenseActive) && !payload.licenseActive;
       await updateDoc(docRef, {
         childName: payload.childName,
         grade: payload.grade,
@@ -236,9 +238,13 @@ export async function publishPairingToCloud(
         isLocked: payload.isLocked,
         isPaired: payload.isPaired,
         completedLessonIds: payload.completedLessonIds,
-        licenseActive: payload.licenseActive,
-        licenseExpiresAt: payload.licenseExpiresAt,
-        licensePaymentRef: payload.licensePaymentRef,
+        licenseActive: preserveCloudLicense ? true : payload.licenseActive,
+        licenseExpiresAt: preserveCloudLicense
+          ? existingData?.licenseExpiresAt || payload.licenseExpiresAt
+          : payload.licenseExpiresAt,
+        licensePaymentRef: preserveCloudLicense
+          ? existingData?.licensePaymentRef || payload.licensePaymentRef
+          : payload.licensePaymentRef,
         updatedAt: payload.updatedAt,
       });
     }
