@@ -804,7 +804,7 @@ class SomaTimeStore private constructor(context: Context) {
                     it.copy(
                         cloudSyncOk = res.ok,
                         cloudSyncMessage = if (res.ok) {
-                            "Paystack License active (${target.licensePaymentRef}) · Code ${target.pairingCode} unlocked ✓"
+                            "M-Pesa License active (${target.licensePaymentRef}) · Code ${target.pairingCode} unlocked ✓"
                         } else {
                             res.errorMessage
                         }
@@ -859,7 +859,7 @@ class SomaTimeStore private constructor(context: Context) {
                 it.copy(
                     cloudSyncOk = allOk,
                     cloudSyncMessage = if (allOk) {
-                        "Activated ${updatedTargets.size} child license(s) via Paystack · Synced to Cloud ✓"
+                        "Activated ${updatedTargets.size} child license(s) via M-Pesa · Synced to Cloud ✓"
                     } else {
                         lastErr.ifEmpty { "Licenses activated locally; Cloud sync failed" }
                     }
@@ -916,7 +916,7 @@ class SomaTimeStore private constructor(context: Context) {
                 showSetupWizard = false,
                 parentContact = phone.ifBlank { current.parentContact },
                 paystackReturnNotice = if (activatedCount > 0) {
-                    "Paystack M-Pesa confirmed (${finalRef.ifBlank { "Paid" }}) · License unlocked ✓"
+                    "M-Pesa confirmed (${finalRef.ifBlank { "Paid" }}) · License unlocked ✓"
                 } else {
                     current.paystackReturnNotice
                 },

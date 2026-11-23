@@ -158,7 +158,7 @@ export function ParentDashboard({
       const target = childrenList.find((c) => c.id === targetChildIds[0]);
       const res = onActivateChildLicense(targetChildIds[0], contact, confirmedRef);
       setLicenseBanner(
-        `Paystack confirmed KES ${MONTHLY_LICENSE_KES}/mo${channelLabel} for ${
+        `M-Pesa confirmed KES ${MONTHLY_LICENSE_KES}/mo${channelLabel} for ${
           singleChildName || target?.name || selectedChild.name
         } · Ref ${res.receiptRef} · Valid until ${res.expiresAt}.`
       );
@@ -166,7 +166,7 @@ export function ParentDashboard({
       const count = onActivateAllUnpaidLicenses(contact, confirmedRef);
       const paidCount = Math.max(count, targetChildIds.length);
       setLicenseBanner(
-        `Paystack confirmed KES ${paidCount * MONTHLY_LICENSE_KES}/mo${channelLabel} for ${paidCount} child profile(s) · Ref ${confirmedRef}.`
+        `M-Pesa confirmed KES ${paidCount * MONTHLY_LICENSE_KES}/mo${channelLabel} for ${paidCount} child profile(s) · Ref ${confirmedRef}.`
       );
     }
     try {
@@ -200,7 +200,7 @@ export function ParentDashboard({
 
       if (!vRes.ok) {
         if (!silentPending) {
-          setLicenseError(vData.error || 'Could not verify Paystack transaction.');
+          setLicenseError(vData.error || 'Could not verify M-Pesa transaction.');
         }
         return 'failed';
       }
@@ -221,7 +221,7 @@ export function ParentDashboard({
 
       if (vData.status === 'failed') {
         setLicenseBanner('');
-        setLicenseError(vData.message || 'Paystack payment was cancelled or failed.');
+        setLicenseError(vData.message || 'M-Pesa payment was cancelled or failed.');
         setPendingCheckout(null);
         try {
           window.localStorage.removeItem(PENDING_PAYSTACK_KEY);
@@ -237,7 +237,7 @@ export function ParentDashboard({
       return 'pending';
     } catch {
       if (!silentPending) {
-        setLicenseError('Unable to reach Paystack verification endpoint right now.');
+        setLicenseError('Unable to reach M-Pesa verification service right now.');
       }
       return 'pending';
     } finally {
@@ -401,7 +401,7 @@ export function ParentDashboard({
       };
 
       if (!initRes.ok || !initData.ok) {
-        setLicenseError(initData.error || 'Could not send Paystack M-Pesa prompt to phone.');
+        setLicenseError(initData.error || 'Could not send M-Pesa prompt to phone.');
         setIsPayingPaystack(false);
         return;
       }
@@ -412,7 +412,7 @@ export function ParentDashboard({
           targetChildIds,
           initData.phoneNumber || cleanPhone,
           ref,
-          initData.mode === 'paystack_test_demo' ? 'paystack test demo' : 'mpesa',
+          initData.mode === 'paystack_test_demo' ? 'M-Pesa test demo' : 'mpesa',
           singleChildName
         );
         setIsPayingPaystack(false);
@@ -421,7 +421,7 @@ export function ParentDashboard({
 
       const reference = initData.reference;
       if (!reference) {
-        setLicenseError('Paystack did not return a transaction reference.');
+        setLicenseError('M-Pesa service did not return a transaction reference.');
         setIsPayingPaystack(false);
         return;
       }
@@ -444,7 +444,7 @@ export function ParentDashboard({
           `M-Pesa PIN prompt for KES ${totalAmount} sent to ${initData.phoneNumber || cleanPhone}. Check your phone to approve.`
       );
     } catch {
-      setLicenseError('Unable to reach Paystack backend endpoint. Check your connection.');
+      setLicenseError('Unable to reach M-Pesa payment service. Check your connection.');
     } finally {
       setIsPayingPaystack(false);
     }
@@ -785,12 +785,12 @@ export function ParentDashboard({
               <div>
                 <p className="flex items-center gap-1.5 text-sm font-bold text-emerald-900">
                   <BadgeCheck className="h-4 w-4 text-emerald-700" />
-                  <span>{selectedChild.name}&apos;s Monthly Paystack License is Active</span>
+                  <span>{selectedChild.name}&apos;s Monthly M-Pesa License is Active</span>
                 </p>
                 <p className="mt-0.5 text-xs text-emerald-800">
                   KES {MONTHLY_LICENSE_KES}/mo · Valid until{' '}
                   <span className="font-mono font-bold">{selectedChild.licenseExpiresAt}</span> ·
-                  Paystack Ref{' '}
+                  M-Pesa Ref{' '}
                   <span className="font-mono font-bold">{selectedChild.licensePaymentRef}</span>
                 </p>
                 <p className="mt-1 text-xs text-slate-700">
@@ -804,7 +804,7 @@ export function ParentDashboard({
                   onClick={handlePayAllUnpaid}
                   className="shrink-0 rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
                 >
-                  Pay Remaining via Paystack ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
+                  Pay Remaining via M-Pesa ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
                 </button>
               )}
             </div>
@@ -816,14 +816,14 @@ export function ParentDashboard({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-bold text-amber-950">
-                    Paystack M-Pesa Prompt · {selectedChild.name} · KES {MONTHLY_LICENSE_KES}/mo
+                    M-Pesa Phone Prompt · {selectedChild.name} · KES {MONTHLY_LICENSE_KES}/mo
                   </p>
                   <p className="text-[11px] text-slate-700">
-                    Enter your phone number to receive an instant M-Pesa PIN prompt on your phone via Paystack. Required before generating a child phone pairing code or activating &ldquo;Activate Child Lock &amp; Hand Over Phone&rdquo;.
+                    Enter your Safaricom M-Pesa number to receive an instant M-Pesa PIN prompt on your phone. Required before generating a child phone pairing code or activating &ldquo;Activate Child Lock &amp; Hand Over Phone&rdquo;.
                   </p>
                 </div>
-                <span className="rounded-lg bg-slate-900 px-3 py-1 text-[11px] font-extrabold text-white">
-                  Paystack M-Pesa · KES {MONTHLY_LICENSE_KES}/child/mo
+                <span className="rounded-lg bg-emerald-800 px-3 py-1 text-[11px] font-extrabold text-white">
+                  Lipa na M-Pesa · KES {MONTHLY_LICENSE_KES}/child/mo
                 </span>
               </div>
 
@@ -854,8 +854,8 @@ export function ParentDashboard({
                     <Smartphone className="h-4 w-4" />
                     <span>
                       {isPayingPaystack
-                        ? 'Sending Phone Prompt...'
-                        : `Pay KES ${MONTHLY_LICENSE_KES}/mo via Paystack`}
+                        ? 'Sending M-Pesa Prompt...'
+                        : `Pay KES ${MONTHLY_LICENSE_KES}/mo via M-Pesa`}
                     </span>
                   </button>
                   {unpaidChildren.length > 1 && (
@@ -865,7 +865,7 @@ export function ParentDashboard({
                       onClick={handlePayAllUnpaid}
                       className="min-h-[42px] rounded-xl border border-teal-700 bg-white px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-50 disabled:opacity-60"
                     >
-                      Pay All ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
+                      Pay All via M-Pesa ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
                     </button>
                   )}
                 </div>
@@ -923,46 +923,25 @@ export function ParentDashboard({
             </div>
           )}
 
-          {/* Paystack Test / Live Readiness Box */}
+          {/* M-Pesa Readiness Box */}
           <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-bold text-slate-900">
-                Paystack Gateway Status:{' '}
+                M-Pesa Payment Status:{' '}
                 <span
                   className={
                     paystackStatus?.configured ? 'text-emerald-700' : 'text-amber-800'
                   }
                 >
                   {paystackStatus?.configured
-                    ? `${paystackStatus.environment === 'live' ? 'Live Mode Active' : 'Paystack Test Mode Active'} (M-Pesa Mobile Money + Card + Bank)`
-                    : 'Local Test Simulation (Add PAYSTACK_SECRET_KEY in Secrets for Real Paystack Checkout)'}
+                    ? `${paystackStatus.environment === 'live' ? 'Live M-Pesa Express Active' : 'M-Pesa Sandbox Mode Active'}`
+                    : 'Local Test Simulation'}
                 </span>
               </span>
             </div>
-            {paystackStatus?.callbackUrl && (
-              <p className="mt-1 text-slate-600 break-all">
-                Callback URL (auto-built):{' '}
-                <span className="font-mono font-semibold text-slate-800">
-                  {paystackStatus.callbackUrl}
-                </span>
-              </p>
-            )}
-            {paystackStatus?.webhookUrl && (
-              <p className="mt-1 text-slate-600 break-all">
-                Webhook URL:{' '}
-                <span className="font-mono font-semibold text-slate-800">
-                  {paystackStatus.webhookUrl}
-                </span>
-              </p>
-            )}
             {!paystackStatus?.configured && (
               <p className="mt-1 leading-relaxed text-slate-600">
-                To accept live/test payments via Paystack: copy your secret key (
-                <span className="font-mono font-semibold text-slate-800">sk_test_...</span> or{' '}
-                <span className="font-mono font-semibold text-slate-800">sk_live_...</span>) from{' '}
-                <span className="font-semibold text-slate-800">dashboard.paystack.com</span> and set{' '}
-                <span className="font-mono font-semibold text-slate-800">PAYSTACK_SECRET_KEY</span>{' '}
-                in AI Studio Secrets.
+                M-Pesa live STK Push is not configured yet on the backend server.
               </p>
             )}
           </div>

@@ -229,14 +229,14 @@ fun ParentDashboardScreen(
                     pendingPaystackChildIds = emptyList()
                     licenseFeedbackIsError = false
                     licenseFeedback =
-                        "Paystack M-Pesa confirmed KES ${res.amountKes}/mo · Ref ${res.receiptRef ?: activeRef}. Pairing & Child Lock unlocked ✓"
+                        "M-Pesa confirmed KES ${res.amountKes}/mo · Ref ${res.receiptRef ?: activeRef}. Pairing & Child Lock unlocked ✓"
                     return@LaunchedEffect
                 }
                 "failed" -> {
                     pendingPaystackRef = null
                     pendingPaystackChildIds = emptyList()
                     licenseFeedbackIsError = true
-                    licenseFeedback = res.message.ifBlank { "Paystack M-Pesa payment was cancelled or failed." }
+                    licenseFeedback = res.message.ifBlank { "M-Pesa payment was cancelled or failed." }
                     return@LaunchedEffect
                 }
             }
@@ -426,7 +426,7 @@ fun ParentDashboardScreen(
                     HorizontalDivider()
 
                     Text(
-                        "Payment Method: Paystack M-Pesa Phone Prompt (KES $perChildKes/child/mo)",
+                        "Payment Method: Lipa na M-Pesa Phone Prompt (KES $perChildKes/child/mo)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = SomaTeal
@@ -490,11 +490,11 @@ fun ParentDashboardScreen(
                                     }
                                 } else if (!res.ok) {
                                     licenseFeedbackIsError = true
-                                    licenseFeedback = res.error.ifBlank { "Could not send Paystack M-Pesa phone prompt." }
+                                    licenseFeedback = res.error.ifBlank { "Could not send M-Pesa phone prompt." }
                                 } else if (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant") {
                                     licenseFeedbackIsError = false
                                     licenseFeedback =
-                                        "Paystack M-Pesa activated for ${child.name} (KES $perChildKes/mo · Ref ${res.reference}) ✓"
+                                        "M-Pesa activated for ${child.name} (KES $perChildKes/mo · Ref ${res.reference}) ✓"
                                 } else {
                                     pendingPaystackRef = res.reference
                                     pendingPaystackChildIds = listOf(child.id)
@@ -516,8 +516,8 @@ fun ParentDashboardScreen(
                         Text(
                             when {
                                 isPayingPaystack -> "Sending M-Pesa Prompt..."
-                                child.licenseActive -> "Renew ${child.name.split(" ").first()}'s License via Paystack (+30 Days · KES $perChildKes)"
-                                else -> "Pay KES $perChildKes/mo via Paystack · ${child.name.split(" ").first()}"
+                                child.licenseActive -> "Renew ${child.name.split(" ").first()}'s License via M-Pesa (+30 Days · KES $perChildKes)"
+                                else -> "Pay KES $perChildKes/mo via M-Pesa · ${child.name.split(" ").first()}"
                             }
                         )
                     }
@@ -553,11 +553,11 @@ fun ParentDashboardScreen(
                                         }
                                     } else if (!res.ok) {
                                         licenseFeedbackIsError = true
-                                        licenseFeedback = res.error.ifBlank { "Could not send Paystack M-Pesa phone prompt." }
+                                        licenseFeedback = res.error.ifBlank { "Could not send M-Pesa phone prompt." }
                                     } else if (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant") {
                                         licenseFeedbackIsError = false
                                         licenseFeedback =
-                                            "All ${unpaidChildren.size} unpaid child licenses activated via Paystack (KES $unpaidTotalKes/mo · Ref ${res.reference}) ✓"
+                                            "All ${unpaidChildren.size} unpaid child licenses activated via M-Pesa (KES $unpaidTotalKes/mo · Ref ${res.reference}) ✓"
                                     } else {
                                         pendingPaystackRef = res.reference
                                         pendingPaystackChildIds = targetIds
@@ -572,7 +572,7 @@ fun ParentDashboardScreen(
                             enabled = !isPayingPaystack,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Pay All Unpaid via Paystack (${unpaidChildren.size} × KES $perChildKes = KES $unpaidTotalKes/mo)")
+                            Text("Pay All Unpaid via M-Pesa (${unpaidChildren.size} × KES $perChildKes = KES $unpaidTotalKes/mo)")
                         }
                     }
 
@@ -593,7 +593,7 @@ fun ParentDashboardScreen(
                                     color = Color(0xFF0C4A6E)
                                 )
                                 Text(
-                                    "The AI Studio preview server checks your Google login cookie in Chrome before triggering the Paystack M-Pesa STK prompt. Complete payment in Chrome, then tap Refresh if it doesn't auto-return.",
+                                    "The AI Studio preview server checks your Google login cookie in Chrome before triggering the M-Pesa STK prompt. Complete payment in Chrome, then tap Refresh if it doesn't auto-return.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color(0xFF0369A1)
                                 )
@@ -662,7 +662,7 @@ fun ParentDashboardScreen(
                                                         pendingPaystackChildIds = emptyList()
                                                         licenseFeedbackIsError = false
                                                         licenseFeedback =
-                                                            "Paystack confirmed KES ${res.amountKes}/mo · Ref ${res.receiptRef ?: activePendingRef} ✓"
+                                                            "M-Pesa confirmed KES ${res.amountKes}/mo · Ref ${res.receiptRef ?: activePendingRef} ✓"
                                                     }
                                                     "failed" -> {
                                                         pendingPaystackRef = null
@@ -699,13 +699,13 @@ fun ParentDashboardScreen(
 
                     val statusText = when {
                         paystackStatus?.requiresBrowserAuth == true ->
-                            "Paystack Gateway: Preview Proxy Requires Browser Session (Opens Browser for M-Pesa Prompt)"
+                            "M-Pesa Payment: Preview Proxy Requires Browser Session (Opens Browser for M-Pesa Prompt)"
                         paystackStatus?.configured == true && paystackStatus?.environment == "live" ->
-                            "Paystack Gateway: Live Mode Active (M-Pesa + Card + Bank)"
+                            "M-Pesa Payment: Live Express STK Active"
                         paystackStatus?.configured == true ->
-                            "Paystack Gateway: Test Mode Active (M-Pesa + Card + Bank)"
+                            "M-Pesa Payment: Test Mode Active"
                         else ->
-                            "Paystack Gateway: Checking Server (${uiState.serverBaseUrl})"
+                            "M-Pesa Payment: Checking Server (${uiState.serverBaseUrl})"
                     }
                     Text(
                         text = statusText,

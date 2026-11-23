@@ -526,7 +526,7 @@ export function useSomaTimeStore() {
           .then(() => {
             setCloudSyncOk(true);
             setCloudSyncMessage(
-              `Paystack License active (${receiptRef}) ✓ · Code ${(updatedTarget as ChildProfile).pairingCode} ready for learner phone`
+              `M-Pesa License active (${receiptRef}) ✓ · Code ${(updatedTarget as ChildProfile).pairingCode} ready for learner phone`
             );
           })
           .catch(() => {});

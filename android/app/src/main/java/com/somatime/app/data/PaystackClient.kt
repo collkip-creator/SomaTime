@@ -190,20 +190,20 @@ object PaystackClient {
             if (bodyText.isBlank()) {
                 return@withContext PaystackInitResult(
                     ok = false,
-                    error = "Empty response from Paystack server (HTTP $code)."
+                    error = "Empty response from M-Pesa server (HTTP $code)."
                 )
             }
 
             val json = parseJsonObjectSafely(bodyText)
                 ?: return@withContext PaystackInitResult(
                     ok = false,
-                    error = "Unexpected non-JSON response from Paystack backend (HTTP $code)."
+                    error = "Unexpected non-JSON response from M-Pesa backend (HTTP $code)."
                 )
 
             if (code !in 200..299 || !json.optBoolean("ok", false)) {
                 return@withContext PaystackInitResult(
                     ok = false,
-                    error = json.optString("error", "Could not send Paystack M-Pesa prompt.")
+                    error = json.optString("error", "Could not send M-Pesa prompt.")
                 )
             }
 
@@ -222,7 +222,7 @@ object PaystackClient {
         } catch (err: Exception) {
             PaystackInitResult(
                 ok = false,
-                error = err.message ?: "Unable to reach SomaTime Paystack backend."
+                error = err.message ?: "Unable to reach SomaTime M-Pesa backend."
             )
         }
     }
@@ -233,7 +233,7 @@ object PaystackClient {
             return@withContext PaystackVerifyResult(
                 ok = false,
                 status = "failed",
-                error = "Invalid Paystack transaction reference."
+                error = "Invalid M-Pesa transaction reference."
             )
         }
 
@@ -268,7 +268,7 @@ object PaystackClient {
                 return@withContext PaystackVerifyResult(
                     ok = false,
                     status = "pending",
-                    error = "No response from Paystack verify endpoint."
+                    error = "No response from M-Pesa verify endpoint."
                 )
             }
 
@@ -276,14 +276,14 @@ object PaystackClient {
                 ?: return@withContext PaystackVerifyResult(
                     ok = false,
                     status = "pending",
-                    error = "Unexpected non-JSON response from Paystack verify endpoint (HTTP $code)."
+                    error = "Unexpected non-JSON response from M-Pesa verify endpoint (HTTP $code)."
                 )
 
             if (code !in 200..299) {
                 return@withContext PaystackVerifyResult(
                     ok = false,
                     status = "failed",
-                    error = json.optString("error", "Paystack verification failed.")
+                    error = json.optString("error", "M-Pesa verification failed.")
                 )
             }
 
@@ -310,7 +310,7 @@ object PaystackClient {
             PaystackVerifyResult(
                 ok = false,
                 status = "pending",
-                error = err.message ?: "Unable to verify Paystack transaction right now."
+                error = err.message ?: "Unable to verify M-Pesa transaction right now."
             )
         }
     }

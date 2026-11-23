@@ -697,14 +697,13 @@ export function SetupOnboardingModal({
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
                     <Lock className="h-4 w-4 shrink-0 text-amber-700" />
                     <span>
-                      Pairing Code &amp; Child Lock Require Paystack License (KES {MONTHLY_LICENSE_KES}/mo)
+                      Pairing Code &amp; Child Lock Require Monthly M-Pesa License (KES {MONTHLY_LICENSE_KES}/mo)
                     </span>
                   </div>
                   <p className="mt-1.5 text-xs text-slate-700">
-                    Pay {createdChild.name.split(' ')[0]}&apos;s monthly Paystack license (M-Pesa,
-                    Card, or Bank) in the <strong>Parents Tab → Licensing Area</strong> to reveal and
-                    activate the pairing code or enable &ldquo;Activate Child Lock &amp; Hand Over
-                    Phone&rdquo;.
+                    Pay {createdChild.name.split(' ')[0]}&apos;s monthly M-Pesa license in the{' '}
+                    <strong>Parents Tab → Licensing Area</strong> to reveal and activate the pairing
+                    code or enable &ldquo;Activate Child Lock &amp; Hand Over Phone&rdquo;.
                   </p>
                 </div>
               )}
@@ -718,7 +717,7 @@ export function SetupOnboardingModal({
               >
                 <Smartphone className="h-4 w-4" />
                 <span>
-                  Go to Parents Tab &amp; Pay via Paystack (KES {MONTHLY_LICENSE_KES}/mo) →
+                  Go to Parents Tab &amp; Pay via M-Pesa (KES {MONTHLY_LICENSE_KES}/mo) →
                 </span>
               </button>
             </div>

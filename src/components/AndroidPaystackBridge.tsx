@@ -122,7 +122,7 @@ export function AndroidPaystackBridge() {
 
       if (!res.ok || !json.ok || !json.reference) {
         setStatus('failed');
-        setMessage(json.error || 'Could not send Paystack M-Pesa prompt.');
+        setMessage(json.error || 'Could not send M-Pesa prompt.');
         return;
       }
 
@@ -148,7 +148,7 @@ export function AndroidPaystackBridge() {
       );
     } catch {
       setStatus('failed');
-      setMessage('Network error contacting SomaTime Paystack backend.');
+      setMessage('Network error contacting SomaTime M-Pesa service.');
     }
   }, [amountKes, childIds, finalizePaidState, phoneNumber, safeParseJson]);
 
@@ -208,7 +208,7 @@ export function AndroidPaystackBridge() {
           </div>
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-teal-700">
-              SomaTime · Paystack M-Pesa
+              SomaTime · Lipa na M-Pesa
             </p>
             <h1 className="font-display text-lg font-extrabold text-slate-900">
               Monthly Child Guard Checkout

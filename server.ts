@@ -244,11 +244,11 @@ async function startServer(): Promise<void> {
             session.channel = typeof payload.data?.channel === 'string' ? payload.data.channel : null;
             session.receiptRef = ref.slice(0, 24);
             session.resultDesc =
-              payload.data?.gateway_response || 'Payment confirmed via Paystack webhook';
+              payload.data?.gateway_response || 'Payment confirmed via M-Pesa';
           } else if (payload.event === 'charge.failed') {
             session.status = 'failed';
             session.resultDesc =
-              payload.data?.gateway_response || 'Paystack charge failed or was declined';
+              payload.data?.gateway_response || 'M-Pesa charge failed or was declined';
           }
         }
       }
@@ -412,7 +412,7 @@ async function startServer(): Promise<void> {
         reference: demoRef,
         expiresAt,
         missingVars: cfg.missingVars,
-        message: `Paystack M-Pesa Test Demo confirmed (KES ${amountKes}) for ${normalizedPhone}.`,
+        message: `M-Pesa Test Demo confirmed (KES ${amountKes}) for ${normalizedPhone}.`,
       });
       return;
     }
@@ -457,7 +457,7 @@ async function startServer(): Promise<void> {
       if (!pRes.ok || !pJson.status || !pJson.data) {
         res.status(400).json({
           ok: false,
-          error: pJson.message || 'Paystack could not trigger the M-Pesa phone prompt.',
+          error: pJson.message || 'Could not trigger the M-Pesa phone prompt.',
         });
         return;
       }
@@ -471,7 +471,7 @@ async function startServer(): Promise<void> {
       if (chargeStatus === 'failed') {
         res.status(400).json({
           ok: false,
-          error: pJson.data.gateway_response || pJson.message || 'Paystack M-Pesa request failed.',
+          error: pJson.data.gateway_response || pJson.message || 'M-Pesa request failed.',
         });
         return;
       }
@@ -487,7 +487,7 @@ async function startServer(): Promise<void> {
           status: 'paid',
           channel: 'mobile_money',
           receiptRef,
-          resultDesc: pJson.data.gateway_response || 'Payment confirmed by Paystack M-Pesa',
+          resultDesc: pJson.data.gateway_response || 'Payment confirmed via M-Pesa',
           createdAtMs: Date.now(),
         });
         res.json({
@@ -536,7 +536,7 @@ async function startServer(): Promise<void> {
     } catch (err) {
       res.status(502).json({
         ok: false,
-        error: err instanceof Error ? err.message : 'Unable to reach Paystack Charge API right now.',
+        error: err instanceof Error ? err.message : 'Unable to reach M-Pesa payment service right now.',
       });
     }
   });
@@ -575,8 +575,8 @@ async function startServer(): Promise<void> {
         ok: false,
         status: 'failed',
         receiptRef: null,
-        message: 'Paystack secret key is not configured.',
-        error: 'Paystack secret key is not configured.',
+        message: 'M-Pesa payment gateway is not configured on this server.',
+        error: 'M-Pesa payment gateway is not configured on this server.',
       };
     }
 
@@ -628,14 +628,14 @@ async function startServer(): Promise<void> {
         if (currency !== 'KES' || paidSubunits < expectedSubunits) {
           if (existing) {
             existing.status = 'failed';
-            existing.resultDesc = 'Paystack payment currency or amount mismatch.';
+            existing.resultDesc = 'M-Pesa payment currency or amount mismatch.';
           }
           return {
             httpStatus: 200,
             ok: true,
             status: 'failed',
             receiptRef: null,
-            message: 'Paystack transaction currency or amount did not match KES 30/child.',
+            message: 'M-Pesa transaction currency or amount did not match KES 30/child.',
           };
         }
 
@@ -645,7 +645,7 @@ async function startServer(): Promise<void> {
           existing.status = 'paid';
           existing.channel = channel;
           existing.receiptRef = receiptRef;
-          existing.resultDesc = vJson.data?.gateway_response || 'Payment verified by Paystack';
+          existing.resultDesc = vJson.data?.gateway_response || 'Payment verified via M-Pesa';
         }
         return {
           httpStatus: 200,
@@ -656,12 +656,12 @@ async function startServer(): Promise<void> {
           channel,
           childIds: existing?.childIds || metaChildIds,
           expiresAt: buildLicenseExpiryIso(30),
-          message: existing?.resultDesc || 'Payment verified by Paystack.',
+          message: existing?.resultDesc || 'Payment verified via M-Pesa.',
         };
       }
 
       if (txStatus === 'failed' || txStatus === 'reversed') {
-        const desc = vJson.data?.gateway_response || 'Paystack payment failed or was declined.';
+        const desc = vJson.data?.gateway_response || 'M-Pesa payment failed or was declined.';
         if (existing) {
           existing.status = 'failed';
           existing.resultDesc = desc;
@@ -675,14 +675,14 @@ async function startServer(): Promise<void> {
         };
       }
 
-      // Note: Paystack reports status='abandoned' immediately after initialize until the customer
-      // completes M-Pesa / Card payment on checkout.paystack.com, so treat it as 'pending'.
+      // Note: Gateway reports status='abandoned' immediately after initialize until the customer
+      // completes M-Pesa payment, so treat it as 'pending'.
       return {
         httpStatus: 200,
         ok: true,
         status: 'pending',
         receiptRef: null,
-        message: 'Awaiting payment completion in Paystack Checkout (M-Pesa / Card)...',
+        message: 'Awaiting M-Pesa PIN confirmation on your phone...',
       };
     } catch {
       return {
@@ -690,7 +690,7 @@ async function startServer(): Promise<void> {
         ok: true,
         status: 'pending',
         receiptRef: null,
-        message: 'Checking Paystack payment status...',
+        message: 'Checking M-Pesa payment status...',
       };
     }
   }
@@ -699,7 +699,7 @@ async function startServer(): Promise<void> {
   app.get('/api/paystack/verify/:reference', async (req: Request, res: Response) => {
     const rawRef = String(req.params.reference || '').trim();
     if (!/^[a-zA-Z0-9_-]{6,80}$/.test(rawRef)) {
-      res.status(400).json({ ok: false, error: 'Invalid Paystack transaction reference.' });
+      res.status(400).json({ ok: false, error: 'Invalid M-Pesa transaction reference.' });
       return;
     }
 
@@ -718,7 +718,7 @@ async function startServer(): Promise<void> {
         .status(400)
         .setHeader('Content-Type', 'text/html; charset=utf-8')
         .send(
-          '<!doctype html><html><body style="font-family:system-ui;padding:32px;background:#f8fafc;color:#0f172a"><h2>Invalid Paystack reference</h2><p>Return to SomaTime and click Verify Payment Now.</p></body></html>'
+          '<!doctype html><html><body style="font-family:system-ui;padding:32px;background:#f8fafc;color:#0f172a"><h2>Invalid M-Pesa reference</h2><p>Return to SomaTime and click Verify Payment Now.</p></body></html>'
         );
       return;
     }
@@ -733,10 +733,10 @@ async function startServer(): Promise<void> {
     const safeRecheckHref = `/api/paystack/callback?client=${client}&reference=${encodeURIComponent(rawRef)}`;
 
     const heading = isPaid
-      ? 'Paystack Payment Confirmed'
+      ? 'M-Pesa Payment Confirmed'
       : isFailed
-        ? 'Paystack Payment Not Completed'
-        : 'Waiting for Paystack Confirmation';
+        ? 'M-Pesa Payment Not Completed'
+        : 'Waiting for M-Pesa Confirmation';
     const badgeColor = isPaid ? '#059669' : isFailed ? '#dc2626' : '#0284c7';
     const detailLine = isPaid
       ? `KES ${safeAmount}/mo verified · Receipt <strong>${safeRef}</strong>`
@@ -748,14 +748,14 @@ async function startServer(): Promise<void> {
           : `<p style="margin-top:16px;font-size:14px;color:#334155;">If you just entered your M-Pesa PIN, wait a few seconds and tap below or switch back to SomaTime and tap Verify Now.</p><a href="${safeRecheckHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#0284c7;color:#fff;font-weight:700;text-decoration:none;">Re-check Payment Status</a>`
         : isPaid
           ? `<p style="margin-top:16px;font-size:14px;color:#334155;">Your original SomaTime tab is now unlocked. You can close this tab or continue below.</p><a href="${safeReturnHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#0f766e;color:#fff;font-weight:700;text-decoration:none;">Return to SomaTime Dashboard →</a>`
-          : `<p style="margin-top:16px;font-size:14px;color:#334155;">If you just completed M-Pesa or Card payment, tap below to re-check confirmation.</p><a href="${safeRecheckHref}" style="display:inline-block;margin-top:12px;margin-right:8px;padding:12px 18px;border-radius:12px;background:#0284c7;color:#fff;font-weight:700;text-decoration:none;">Re-check Status</a><a href="${safeReturnHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#e2e8f0;color:#0f172a;font-weight:700;text-decoration:none;">Back to Dashboard</a>`;
+          : `<p style="margin-top:16px;font-size:14px;color:#334155;">If you just completed M-Pesa payment, tap below to re-check confirmation.</p><a href="${safeRecheckHref}" style="display:inline-block;margin-top:12px;margin-right:8px;padding:12px 18px;border-radius:12px;background:#0284c7;color:#fff;font-weight:700;text-decoration:none;">Re-check Status</a><a href="${safeReturnHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#e2e8f0;color:#0f172a;font-weight:700;text-decoration:none;">Back to Dashboard</a>`;
 
     res
       .status(200)
       .setHeader('Content-Type', 'text/html; charset=utf-8')
       .setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
       .send(
-        `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)} · SomaTime</title></head><body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;font-family:system-ui,-apple-system,sans-serif;padding:20px;color:#0f172a;"><div style="max-width:460px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:28px;box-shadow:0 10px 30px rgba(15,23,42,.06);"><div style="display:inline-block;padding:4px 10px;border-radius:8px;background:${badgeColor};color:#fff;font-size:12px;font-weight:700;">SomaTime · Paystack</div><h1 style="margin:14px 0 8px;font-size:22px;line-height:1.25;">${escapeHtml(heading)}</h1><p style="margin:0;font-size:14px;color:#334155;">${detailLine}</p>${actionBlock}</div></body></html>`
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)} · SomaTime</title></head><body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;font-family:system-ui,-apple-system,sans-serif;padding:20px;color:#0f172a;"><div style="max-width:460px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:28px;box-shadow:0 10px 30px rgba(15,23,42,.06);"><div style="display:inline-block;padding:4px 10px;border-radius:8px;background:${badgeColor};color:#fff;font-size:12px;font-weight:700;">SomaTime · Lipa na M-Pesa</div><h1 style="margin:14px 0 8px;font-size:22px;line-height:1.25;">${escapeHtml(heading)}</h1><p style="margin:0;font-size:14px;color:#334155;">${detailLine}</p>${actionBlock}</div></body></html>`
       );
   });
 
