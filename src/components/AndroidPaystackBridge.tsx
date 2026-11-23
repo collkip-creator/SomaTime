@@ -67,6 +67,20 @@ export function AndroidPaystackBridge() {
     [buildReturnAppUrl, pairingCodes]
   );
 
+  const safeParseJson = useCallback(async <T,>(res: Response): Promise<T | null> => {
+    const contentType = res.headers.get('content-type') || '';
+    const text = await res.text();
+    const trimmed = text.trimStart();
+    if (contentType.toLowerCase().includes('text/html') || trimmed.startsWith('<')) {
+      return null;
+    }
+    try {
+      return JSON.parse(trimmed) as T;
+    } catch {
+      return null;
+    }
+  }, []);
+
   const triggerMpesaPrompt = useCallback(async () => {
     const cleanPhone = phoneNumber.trim();
     if (cleanPhone.replace(/\D/g, '').length < 9 || childIds.length === 0) {
@@ -88,7 +102,7 @@ export function AndroidPaystackBridge() {
           client: 'android',
         }),
       });
-      const json = (await res.json()) as {
+      const json = await safeParseJson<{
         ok?: boolean;
         mode?: string;
         reference?: string;
@@ -96,7 +110,15 @@ export function AndroidPaystackBridge() {
         expiresAt?: string;
         message?: string;
         error?: string;
-      };
+      }>(res);
+
+      if (!json) {
+        setStatus('failed');
+        setMessage(
+          'Browser session check interrupted the request. Refresh this page while signed into Google, then tap Pay again.'
+        );
+        return;
+      }
 
       if (!res.ok || !json.ok || !json.reference) {
         setStatus('failed');
@@ -128,18 +150,19 @@ export function AndroidPaystackBridge() {
       setStatus('failed');
       setMessage('Network error contacting SomaTime Paystack backend.');
     }
-  }, [amountKes, childIds, finalizePaidState, phoneNumber]);
+  }, [amountKes, childIds, finalizePaidState, phoneNumber, safeParseJson]);
 
   const checkVerificationNow = useCallback(async () => {
     if (!reference) return;
     try {
       const res = await fetch(`/api/paystack/verify/${encodeURIComponent(reference)}`);
-      const json = (await res.json()) as {
+      const json = await safeParseJson<{
         status?: 'pending' | 'paid' | 'failed';
         receiptRef?: string | null;
         expiresAt?: string;
         message?: string;
-      };
+      }>(res);
+      if (!json) return;
       if (json.status === 'paid') {
         const rcpt = json.receiptRef || `PSK-${reference.slice(-8).toUpperCase()}`;
         const exp = json.expiresAt || new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10);
@@ -156,7 +179,7 @@ export function AndroidPaystackBridge() {
     } catch {
       // Keep waiting cleanly on transient polling error
     }
-  }, [amountKes, finalizePaidState, reference]);
+  }, [amountKes, finalizePaidState, reference, safeParseJson]);
 
   useEffect(() => {
     if (autoTriggeredRef.current) return;
