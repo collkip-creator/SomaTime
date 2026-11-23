@@ -140,6 +140,16 @@ data class ChildActivityLog(
     val timestamp: String
 )
 
+data class LinkedTeacherSummary(
+    val teacherCode: String,
+    val fullName: String,
+    val school: String,
+    val tscNumber: String = "",
+    val grade: Int,
+    val classStream: String,
+    val subjects: List<LearningArea>
+)
+
 data class ChildProfile(
     val id: String,
     val name: String,
@@ -165,7 +175,9 @@ data class ChildProfile(
     val licenseActive: Boolean = false,
     val licensePlanLabel: String = "Monthly Child Guard · KES 30/mo",
     val licenseExpiresAt: String? = null,
-    val licensePaymentRef: String? = null
+    val licensePaymentRef: String? = null,
+    val linkedTeacherCodes: List<String> = emptyList(),
+    val linkedTeachers: List<LinkedTeacherSummary> = emptyList()
 )
 
 data class TeacherAccount(

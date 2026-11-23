@@ -124,6 +124,9 @@ export default function App() {
           onDeclineApproval={(childId, approvalId) =>
             store.resolveApproval(childId, approvalId, false)
           }
+          onVerifyTeacherCode={store.verifyTeacherClassCode}
+          onLinkTeacherToChild={store.linkTeacherToChild}
+          onUnlinkTeacherFromChild={store.unlinkTeacherFromChild}
         />
       )}
 
@@ -284,6 +287,7 @@ export default function App() {
               subjects,
               grade,
               classStream: `Grade ${grade} East - ${school}`,
+              autoLinkOwnedChildren: true,
             });
           }}
           onLogoutTeacher={store.logoutTeacher}

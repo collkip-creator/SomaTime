@@ -5,14 +5,17 @@ import {
   Clock,
   Eye,
   EyeOff,
+  GraduationCap,
   KeyRound,
   Link2,
   Lock,
   Plus,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Smartphone,
   TabletSmartphone,
+  Trash2,
   Unlock,
   UserPlus,
   X,
@@ -28,6 +31,7 @@ import type {
   ChildProfile,
   DeviceMode,
   LearningArea,
+  LinkedTeacherSummary,
   PendingApproval,
   TeacherAccount,
 } from '../types/somatime';
@@ -46,10 +50,10 @@ interface ParentDashboardProps {
   onUpdateParentPin: (newPin: string) => boolean;
   onActivateChildLicense: (
     childId: string,
-    payerPhone?: string,
+    payerContact?: string,
     explicitReceiptRef?: string
   ) => { ok: boolean; receiptRef: string; expiresAt: string };
-  onActivateAllUnpaidLicenses: (payerPhone?: string, explicitReceiptRef?: string) => number;
+  onActivateAllUnpaidLicenses: (payerContact?: string, explicitReceiptRef?: string) => number;
   onUpdateChild: (id: string, patch: Partial<ChildProfile>) => void;
   onRegeneratePairingCode: (id: string) => string | null;
   onOpenLearnerPair: () => void;
@@ -60,6 +64,11 @@ interface ParentDashboardProps {
   onActivateHandOff: (id: string) => boolean;
   onRequestApprovalPin: (approval: PendingApproval) => void;
   onDeclineApproval: (childId: string, approvalId: string) => void;
+  onVerifyTeacherCode: (
+    rawCode: string
+  ) => Promise<{ ok: boolean; teacher?: LinkedTeacherSummary; message: string }>;
+  onLinkTeacherToChild: (childId: string, teacher: LinkedTeacherSummary) => void;
+  onUnlinkTeacherFromChild: (childId: string, teacherCode: string) => void;
 }
 
 export function ParentDashboard({
@@ -86,11 +95,24 @@ export function ParentDashboard({
   onActivateHandOff,
   onRequestApprovalPin,
   onDeclineApproval,
+  onVerifyTeacherCode,
+  onLinkTeacherToChild,
+  onUnlinkTeacherFromChild,
 }: ParentDashboardProps) {
   const [showAddChild, setShowAddChild] = useState(false);
   const [newName, setNewName] = useState('');
   const [newGrade, setNewGrade] = useState(5);
   const [newSchool, setNewSchool] = useState('');
+
+  // Parent Class-Code Opt-In state (guards against unapproved teachers)
+  const [teacherCodeInput, setTeacherCodeInput] = useState('');
+  const [isVerifyingTeacherCode, setIsVerifyingTeacherCode] = useState(false);
+  const [verifiedTeacherPreview, setVerifiedTeacherPreview] =
+    useState<LinkedTeacherSummary | null>(null);
+  const [teacherLinkFeedback, setTeacherLinkFeedback] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
 
   // Parent PIN Setup / Update state
   const [showCurrentPin, setShowCurrentPin] = useState(false);
@@ -98,31 +120,196 @@ export function ParentDashboard({
   const [confirmDraftPin, setConfirmDraftPin] = useState('');
   const [pinSaveMsg, setPinSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Per-child M-Pesa monthly licensing state (KES 30/child/mo)
-  const [payerPhone, setPayerPhone] = useState(parentContact || '');
+  // Per-child Paystack M-Pesa monthly licensing state (KES 30/child/mo)
+  const initialPhone = parentContact && !parentContact.includes('@') ? parentContact.trim() : '';
+  const [payerPhone, setPayerPhone] = useState(initialPhone);
   const [licenseBanner, setLicenseBanner] = useState('');
   const [licenseError, setLicenseError] = useState('');
-  const [isPayingMpesa, setIsPayingMpesa] = useState(false);
-  const [mpesaStatus, setMpesaStatus] = useState<{
+  const [isPayingPaystack, setIsPayingPaystack] = useState(false);
+  const [isVerifyingPaystack, setIsVerifyingPaystack] = useState(false);
+  const [pendingCheckout, setPendingCheckout] = useState<{
+    reference: string;
+    phoneNumber: string;
+    childIds: string[];
+    amountKes: number;
+    childName?: string;
+  } | null>(null);
+  const [paystackStatus, setPaystackStatus] = useState<{
     configured: boolean;
-    environment: 'sandbox' | 'production';
-    shortcode: string;
-    hasCallbackUrl: boolean;
+    environment: 'test' | 'live';
+    channels: string[];
+    hasWebhookUrl: boolean;
+    callbackUrl?: string | null;
+    webhookUrl?: string | null;
     missingVars: string[];
   } | null>(null);
 
+  const PENDING_PAYSTACK_KEY = 'somatime_pending_paystack';
+
+  const applyConfirmedPaystackPayment = (
+    targetChildIds: string[],
+    contact: string,
+    confirmedRef: string,
+    channel?: string | null,
+    singleChildName?: string
+  ) => {
+    const channelLabel = channel ? ` (${channel.replace(/_/g, ' ')})` : '';
+    if (targetChildIds.length === 1) {
+      const target = childrenList.find((c) => c.id === targetChildIds[0]);
+      const res = onActivateChildLicense(targetChildIds[0], contact, confirmedRef);
+      setLicenseBanner(
+        `Paystack confirmed KES ${MONTHLY_LICENSE_KES}/mo${channelLabel} for ${
+          singleChildName || target?.name || selectedChild.name
+        } · Ref ${res.receiptRef} · Valid until ${res.expiresAt}.`
+      );
+    } else {
+      const count = onActivateAllUnpaidLicenses(contact, confirmedRef);
+      const paidCount = Math.max(count, targetChildIds.length);
+      setLicenseBanner(
+        `Paystack confirmed KES ${paidCount * MONTHLY_LICENSE_KES}/mo${channelLabel} for ${paidCount} child profile(s) · Ref ${confirmedRef}.`
+      );
+    }
+    try {
+      window.localStorage.removeItem(PENDING_PAYSTACK_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    setPendingCheckout(null);
+    setLicenseError('');
+  };
+
+  const verifyPaystackReference = async (
+    reference: string,
+    targetChildIds: string[],
+    contact: string,
+    singleChildName?: string,
+    silentPending = false
+  ): Promise<'paid' | 'pending' | 'failed'> => {
+    setIsVerifyingPaystack(true);
+    try {
+      const vRes = await fetch(`/api/paystack/verify/${encodeURIComponent(reference)}`);
+      const vData = (await vRes.json()) as {
+        ok?: boolean;
+        status?: 'pending' | 'paid' | 'failed';
+        receiptRef?: string | null;
+        channel?: string | null;
+        childIds?: string[];
+        message?: string;
+        error?: string;
+      };
+
+      if (!vRes.ok) {
+        if (!silentPending) {
+          setLicenseError(vData.error || 'Could not verify Paystack transaction.');
+        }
+        return 'failed';
+      }
+
+      if (vData.status === 'paid') {
+        const resolvedChildIds =
+          targetChildIds.length > 0 ? targetChildIds : vData.childIds || [selectedChild.id];
+        const confirmedRef = vData.receiptRef || `PSK-${reference.slice(-8).toUpperCase()}`;
+        applyConfirmedPaystackPayment(
+          resolvedChildIds,
+          contact,
+          confirmedRef,
+          vData.channel,
+          singleChildName
+        );
+        return 'paid';
+      }
+
+      if (vData.status === 'failed') {
+        setLicenseBanner('');
+        setLicenseError(vData.message || 'Paystack payment was cancelled or failed.');
+        setPendingCheckout(null);
+        try {
+          window.localStorage.removeItem(PENDING_PAYSTACK_KEY);
+        } catch {
+          // Ignore storage errors
+        }
+        return 'failed';
+      }
+
+      if (!silentPending && vData.message) {
+        setLicenseBanner(vData.message);
+      }
+      return 'pending';
+    } catch {
+      if (!silentPending) {
+        setLicenseError('Unable to reach Paystack verification endpoint right now.');
+      }
+      return 'pending';
+    } finally {
+      setIsVerifyingPaystack(false);
+    }
+  };
+
   useEffect(() => {
     let active = true;
-    fetch('/api/mpesa/status')
+    fetch('/api/paystack/status')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (active && data) setMpesaStatus(data);
+        if (active && data) setPaystackStatus(data);
       })
       .catch(() => {});
+
+    // Check if returning from Paystack callback redirect (?trxref=... or ?reference=...)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const callbackRef = (params.get('reference') || params.get('trxref') || '').trim();
+      if (callbackRef && /^[a-zA-Z0-9_-]{6,80}$/.test(callbackRef)) {
+        const savedRaw = window.localStorage.getItem(PENDING_PAYSTACK_KEY);
+        const saved = savedRaw
+          ? (JSON.parse(savedRaw) as {
+              reference?: string;
+              childIds?: string[];
+              email?: string;
+              childName?: string;
+            })
+          : null;
+        const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+        void verifyPaystackReference(
+          callbackRef,
+          saved?.childIds || [selectedChild.id],
+          payerPhone,
+          saved?.childName,
+          false
+        );
+      }
+    } catch {
+      // Ignore query parse failures
+    }
+
     return () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!pendingCheckout) return;
+    let cancelled = false;
+    const pollId = window.setInterval(() => {
+      if (cancelled) return;
+      void verifyPaystackReference(
+        pendingCheckout.reference,
+        pendingCheckout.childIds,
+        pendingCheckout.phoneNumber || payerPhone,
+        pendingCheckout.childName,
+        true
+      ).then((status) => {
+        if (status === 'paid' || status === 'failed') {
+          window.clearInterval(pollId);
+        }
+      });
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
+  }, [pendingCheckout]);
 
   const remainingCapMins = Math.max(
     0,
@@ -180,119 +367,96 @@ export function ParentDashboard({
     }
   };
 
-  const runMpesaStkCheckout = async (targetChildIds: string[], singleChildName?: string) => {
-    if (isPayingMpesa || targetChildIds.length === 0) return;
-    setIsPayingMpesa(true);
+  const runPaystackCheckout = async (targetChildIds: string[], singleChildName?: string) => {
+    if (isPayingPaystack || targetChildIds.length === 0) return;
+    const cleanPhone = payerPhone.trim();
+    if (cleanPhone.replace(/\D/g, '').length < 9) {
+      setLicenseError('Enter a valid Kenyan M-Pesa phone number (e.g. 0712 345 678).');
+      return;
+    }
+
+    setIsPayingPaystack(true);
     setLicenseError('');
     setLicenseBanner('');
 
     const totalAmount = targetChildIds.length * MONTHLY_LICENSE_KES;
     try {
-      const initRes = await fetch('/api/mpesa/stkpush', {
+      const initRes = await fetch('/api/paystack/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phoneNumber: payerPhone,
+          phoneNumber: cleanPhone,
           childIds: targetChildIds,
-          accountReference:
-            targetChildIds.length === 1 ? `SOMA-${targetChildIds[0].slice(0, 6)}` : 'SOMA-FAMILY',
+          client: 'web',
         }),
       });
       const initData = (await initRes.json()) as {
         ok?: boolean;
-        mode?: 'sandbox_demo' | 'daraja_stk';
-        checkoutRequestId?: string;
+        mode?: 'paystack_test_demo' | 'paystack_stk' | 'paystack_stk_instant';
+        reference?: string;
         receiptRef?: string;
+        phoneNumber?: string;
         message?: string;
         error?: string;
       };
 
       if (!initRes.ok || !initData.ok) {
-        setLicenseError(initData.error || 'Could not initiate M-Pesa STK Push.');
-        setIsPayingMpesa(false);
+        setLicenseError(initData.error || 'Could not send Paystack M-Pesa prompt to phone.');
+        setIsPayingPaystack(false);
         return;
       }
 
-      if (initData.mode === 'sandbox_demo') {
-        if (targetChildIds.length === 1) {
-          const res = onActivateChildLicense(targetChildIds[0], payerPhone, initData.receiptRef);
-          setLicenseBanner(
-            `M-Pesa Sandbox confirmed KES ${totalAmount}/mo for ${singleChildName || selectedChild.name} · Ref ${res.receiptRef} · Valid until ${res.expiresAt}. Pairing & Child Lock unlocked.`
-          );
-        } else {
-          const count = onActivateAllUnpaidLicenses(payerPhone, initData.receiptRef);
-          setLicenseBanner(
-            `M-Pesa Sandbox confirmed KES ${count * MONTHLY_LICENSE_KES}/mo for ${count} child profile(s) · Ref ${initData.receiptRef}. All pairing codes & Child Locks unlocked.`
-          );
-        }
-        setIsPayingMpesa(false);
+      if (initData.mode === 'paystack_test_demo' || initData.mode === 'paystack_stk_instant') {
+        const ref = initData.receiptRef || initData.reference || `PSK-${Date.now().toString().slice(-6)}`;
+        applyConfirmedPaystackPayment(
+          targetChildIds,
+          initData.phoneNumber || cleanPhone,
+          ref,
+          initData.mode === 'paystack_test_demo' ? 'paystack test demo' : 'mpesa',
+          singleChildName
+        );
+        setIsPayingPaystack(false);
         return;
       }
 
-      const checkoutId = initData.checkoutRequestId;
-      if (!checkoutId) {
-        setLicenseError('Daraja did not return a CheckoutRequestID.');
-        setIsPayingMpesa(false);
+      const reference = initData.reference;
+      if (!reference) {
+        setLicenseError('Paystack did not return a transaction reference.');
+        setIsPayingPaystack(false);
         return;
       }
 
+      const nextPending = {
+        reference,
+        phoneNumber: initData.phoneNumber || cleanPhone,
+        childIds: targetChildIds,
+        amountKes: totalAmount,
+        childName: singleChildName,
+      };
+      setPendingCheckout(nextPending);
+      try {
+        window.localStorage.setItem(PENDING_PAYSTACK_KEY, JSON.stringify(nextPending));
+      } catch {
+        // Ignore storage errors
+      }
       setLicenseBanner(
         initData.message ||
-          `M-Pesa STK prompt for KES ${totalAmount} sent to ${payerPhone}. Enter your M-Pesa PIN on your phone...`
-      );
-
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await new Promise((r) => window.setTimeout(r, 3000));
-        const qRes = await fetch(`/api/mpesa/query/${encodeURIComponent(checkoutId)}`);
-        const qData = (await qRes.json()) as {
-          status?: 'pending' | 'paid' | 'failed';
-          receiptRef?: string | null;
-          message?: string;
-        };
-
-        if (qData.status === 'paid') {
-          const confirmedRef = qData.receiptRef || `MPESA-${checkoutId.slice(-8).toUpperCase()}`;
-          if (targetChildIds.length === 1) {
-            const res = onActivateChildLicense(targetChildIds[0], payerPhone, confirmedRef);
-            setLicenseBanner(
-              `M-Pesa confirmed KES ${totalAmount}/mo for ${singleChildName || selectedChild.name} · Receipt ${res.receiptRef} · Valid until ${res.expiresAt}.`
-            );
-          } else {
-            const count = onActivateAllUnpaidLicenses(payerPhone, confirmedRef);
-            setLicenseBanner(
-              `M-Pesa confirmed KES ${count * MONTHLY_LICENSE_KES}/mo for ${count} child profile(s) · Receipt ${confirmedRef}.`
-            );
-          }
-          setIsPayingMpesa(false);
-          return;
-        }
-
-        if (qData.status === 'failed') {
-          setLicenseBanner('');
-          setLicenseError(qData.message || 'M-Pesa payment was cancelled or failed.');
-          setIsPayingMpesa(false);
-          return;
-        }
-      }
-
-      setLicenseBanner('');
-      setLicenseError(
-        'Still waiting on M-Pesa confirmation. If you completed the PIN prompt, retry in a moment.'
+          `M-Pesa PIN prompt for KES ${totalAmount} sent to ${initData.phoneNumber || cleanPhone}. Check your phone to approve.`
       );
     } catch {
-      setLicenseError('Unable to reach M-Pesa server endpoint. Check your connection.');
+      setLicenseError('Unable to reach Paystack backend endpoint. Check your connection.');
     } finally {
-      setIsPayingMpesa(false);
+      setIsPayingPaystack(false);
     }
   };
 
   const handlePaySelectedLicense = (e: React.FormEvent) => {
     e.preventDefault();
-    void runMpesaStkCheckout([selectedChild.id], selectedChild.name);
+    void runPaystackCheckout([selectedChild.id], selectedChild.name);
   };
 
   const handlePayAllUnpaid = () => {
-    void runMpesaStkCheckout(unpaidChildren.map((c) => c.id));
+    void runPaystackCheckout(unpaidChildren.map((c) => c.id));
   };
 
   return (
@@ -621,12 +785,12 @@ export function ParentDashboard({
               <div>
                 <p className="flex items-center gap-1.5 text-sm font-bold text-emerald-900">
                   <BadgeCheck className="h-4 w-4 text-emerald-700" />
-                  <span>{selectedChild.name}&apos;s Monthly M-Pesa License is Active</span>
+                  <span>{selectedChild.name}&apos;s Monthly Paystack License is Active</span>
                 </p>
                 <p className="mt-0.5 text-xs text-emerald-800">
                   KES {MONTHLY_LICENSE_KES}/mo · Valid until{' '}
                   <span className="font-mono font-bold">{selectedChild.licenseExpiresAt}</span> ·
-                  M-Pesa Receipt{' '}
+                  Paystack Ref{' '}
                   <span className="font-mono font-bold">{selectedChild.licensePaymentRef}</span>
                 </p>
                 <p className="mt-1 text-xs text-slate-700">
@@ -636,11 +800,11 @@ export function ParentDashboard({
               {unpaidChildren.length > 0 && (
                 <button
                   type="button"
-                  disabled={isPayingMpesa}
+                  disabled={isPayingPaystack}
                   onClick={handlePayAllUnpaid}
                   className="shrink-0 rounded-xl border border-emerald-300 bg-white px-3.5 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
                 >
-                  Pay Remaining via M-Pesa ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
+                  Pay Remaining via Paystack ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
                 </button>
               )}
             </div>
@@ -652,54 +816,54 @@ export function ParentDashboard({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-xs font-bold text-amber-950">
-                    M-Pesa Lipa Na SomaTime · {selectedChild.name} · KES {MONTHLY_LICENSE_KES}/mo
+                    Paystack M-Pesa Prompt · {selectedChild.name} · KES {MONTHLY_LICENSE_KES}/mo
                   </p>
                   <p className="text-[11px] text-slate-700">
-                    M-Pesa only. Required before generating a child phone pairing code or activating &ldquo;Activate Child Lock &amp; Hand Over Phone&rdquo;.
+                    Enter your phone number to receive an instant M-Pesa PIN prompt on your phone via Paystack. Required before generating a child phone pairing code or activating &ldquo;Activate Child Lock &amp; Hand Over Phone&rdquo;.
                   </p>
                 </div>
-                <span className="rounded-xl bg-emerald-700 px-3 py-1 text-[11px] font-extrabold text-white">
-                  M-Pesa Only · Paybill {mpesaStatus?.shortcode || '174379'}
+                <span className="rounded-lg bg-slate-900 px-3 py-1 text-[11px] font-extrabold text-white">
+                  Paystack M-Pesa · KES {MONTHLY_LICENSE_KES}/child/mo
                 </span>
               </div>
 
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-12 sm:items-end">
-                <div className="sm:col-span-5">
-                  <label htmlFor="mpesa-phone-input" className="block text-[11px] font-semibold text-slate-700">
-                    M-Pesa Phone Number (Safaricom)
+                <div className="sm:col-span-6">
+                  <label htmlFor="paystack-phone-input" className="block text-[11px] font-semibold text-slate-700">
+                    Safaricom M-Pesa Phone Number
                   </label>
                   <input
-                    id="mpesa-phone-input"
+                    id="paystack-phone-input"
                     type="tel"
                     required
-                    placeholder="0712 345 678 or 2547..."
+                    placeholder="0712 345 678 or +2547..."
                     value={payerPhone}
                     onChange={(e) => {
                       setPayerPhone(e.target.value);
                       setLicenseError('');
                     }}
-                    className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono text-xs font-semibold text-slate-900 focus:border-emerald-600 focus:outline-none"
+                    className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 font-mono text-xs font-semibold text-slate-900 focus:border-teal-600 focus:outline-none"
                   />
                 </div>
-                <div className="flex flex-wrap gap-2 sm:col-span-7 sm:justify-end">
+                <div className="flex flex-wrap gap-2 sm:col-span-6 sm:justify-end">
                   <button
                     type="submit"
-                    disabled={isPayingMpesa}
-                    className="flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-extrabold text-white transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                    disabled={isPayingPaystack}
+                    className="flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2 text-xs font-extrabold text-white transition-colors hover:bg-teal-800 disabled:opacity-60"
                   >
                     <Smartphone className="h-4 w-4" />
                     <span>
-                      {isPayingMpesa
-                        ? 'Sending M-Pesa STK...'
-                        : `Pay KES ${MONTHLY_LICENSE_KES}/mo via M-Pesa (${selectedChild.name.split(' ')[0]})`}
+                      {isPayingPaystack
+                        ? 'Sending Phone Prompt...'
+                        : `Pay KES ${MONTHLY_LICENSE_KES}/mo via Paystack`}
                     </span>
                   </button>
                   {unpaidChildren.length > 1 && (
                     <button
                       type="button"
-                      disabled={isPayingMpesa}
+                      disabled={isPayingPaystack}
                       onClick={handlePayAllUnpaid}
-                      className="min-h-[42px] rounded-xl border border-emerald-700 bg-white px-3 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-50 disabled:opacity-60"
+                      className="min-h-[42px] rounded-xl border border-teal-700 bg-white px-3 py-2 text-xs font-bold text-teal-900 hover:bg-teal-50 disabled:opacity-60"
                     >
                       Pay All ({unpaidChildren.length} × KES {MONTHLY_LICENSE_KES})
                     </button>
@@ -709,33 +873,96 @@ export function ParentDashboard({
             </form>
           )}
 
-          {/* Daraja M-Pesa Sandbox / Live Readiness Box */}
+          {pendingCheckout && (
+            <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-extrabold text-sky-950">
+                    Check Your Phone · M-Pesa Prompt Sent ({pendingCheckout.phoneNumber})
+                  </p>
+                  <p className="text-[11px] text-sky-900">
+                    Amount: <strong>KES {pendingCheckout.amountKes}</strong> · Ref:{' '}
+                    <span className="font-mono font-bold">{pendingCheckout.reference}</span>. Enter
+                    your M-Pesa PIN on your phone—license unlocks automatically once confirmed.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingCheckout(null);
+                    try {
+                      window.localStorage.removeItem(PENDING_PAYSTACK_KEY);
+                    } catch {
+                      // Ignore
+                    }
+                  }}
+                  className="rounded-lg border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-bold text-sky-900 hover:bg-sky-100"
+                >
+                  Cancel
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={isVerifyingPaystack}
+                  onClick={() =>
+                    void verifyPaystackReference(
+                      pendingCheckout.reference,
+                      pendingCheckout.childIds,
+                      pendingCheckout.phoneNumber || payerPhone,
+                      pendingCheckout.childName,
+                      false
+                    )
+                  }
+                  className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-sky-700 px-4 py-2 text-xs font-extrabold text-white transition-colors hover:bg-sky-800 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${isVerifyingPaystack ? 'animate-spin' : ''}`} />
+                  <span>{isVerifyingPaystack ? 'Checking M-Pesa...' : 'I Have Entered PIN · Verify Now'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Paystack Test / Live Readiness Box */}
           <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-700">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-bold text-slate-900">
-                Safaricom Daraja STK Status:{' '}
+                Paystack Gateway Status:{' '}
                 <span
                   className={
-                    mpesaStatus?.configured ? 'text-emerald-700' : 'text-amber-800'
+                    paystackStatus?.configured ? 'text-emerald-700' : 'text-amber-800'
                   }
                 >
-                  {mpesaStatus?.configured
-                    ? `${mpesaStatus.environment === 'production' ? 'Production Live' : 'Daraja Sandbox Active'} (Shortcode ${mpesaStatus.shortcode})`
-                    : 'Local Sandbox Simulation (Add Daraja Secrets for Real STK Phone Popups)'}
+                  {paystackStatus?.configured
+                    ? `${paystackStatus.environment === 'live' ? 'Live Mode Active' : 'Paystack Test Mode Active'} (M-Pesa Mobile Money + Card + Bank)`
+                    : 'Local Test Simulation (Add PAYSTACK_SECRET_KEY in Secrets for Real Paystack Checkout)'}
                 </span>
               </span>
             </div>
-            {!mpesaStatus?.configured && (
-              <p className="mt-1 leading-relaxed text-slate-600">
-                To send real M-Pesa Sandbox PIN prompts to a phone: create a Sandbox app on{' '}
-                <span className="font-semibold text-slate-800">developer.safaricom.co.ke</span>{' '}
-                (Lipa Na M-Pesa Sandbox), and add{' '}
+            {paystackStatus?.callbackUrl && (
+              <p className="mt-1 text-slate-600 break-all">
+                Callback URL (auto-built):{' '}
                 <span className="font-mono font-semibold text-slate-800">
-                  {mpesaStatus?.missingVars?.join(', ') ||
-                    'MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY, MPESA_SHORTCODE=174379'}
-                </span>{' '}
-                plus HTTPS <span className="font-mono font-semibold text-slate-800">APP_URL</span> in
-                AI Studio Secrets.
+                  {paystackStatus.callbackUrl}
+                </span>
+              </p>
+            )}
+            {paystackStatus?.webhookUrl && (
+              <p className="mt-1 text-slate-600 break-all">
+                Webhook URL:{' '}
+                <span className="font-mono font-semibold text-slate-800">
+                  {paystackStatus.webhookUrl}
+                </span>
+              </p>
+            )}
+            {!paystackStatus?.configured && (
+              <p className="mt-1 leading-relaxed text-slate-600">
+                To accept live/test payments via Paystack: copy your secret key (
+                <span className="font-mono font-semibold text-slate-800">sk_test_...</span> or{' '}
+                <span className="font-mono font-semibold text-slate-800">sk_live_...</span>) from{' '}
+                <span className="font-semibold text-slate-800">dashboard.paystack.com</span> and set{' '}
+                <span className="font-mono font-semibold text-slate-800">PAYSTACK_SECRET_KEY</span>{' '}
+                in AI Studio Secrets.
               </p>
             )}
           </div>
@@ -923,6 +1150,183 @@ export function ParentDashboard({
             </div>
           </div>
         )}
+      </section>
+
+      {/* Parent Class-Code Opt-In Guard (Blocks unapproved teachers from pushing tasks) */}
+      <section
+        aria-label="Linked class teachers"
+        className="mt-6 rounded-3xl border border-slate-200 bg-white p-5 sm:p-6"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 shrink-0">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="font-display text-lg font-bold text-slate-900">
+                Linked Class Teachers for {selectedChild.name}
+              </h2>
+              <p className="mt-0.5 max-w-2xl text-xs text-slate-600">
+                Only teachers whose Class Code you verify and link here can push priority
+                assignments or custom worksheets to {selectedChild.name.split(' ')[0]}&apos;s
+                device. Unlinked teachers cannot reach your child.
+              </p>
+            </div>
+          </div>
+          <span className="font-mono text-xs font-bold text-teal-800 tabular-nums">
+            {(selectedChild.linkedTeacherCodes || []).length} linked
+          </span>
+        </div>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!teacherCodeInput.trim() || isVerifyingTeacherCode) return;
+            setIsVerifyingTeacherCode(true);
+            setTeacherLinkFeedback(null);
+            setVerifiedTeacherPreview(null);
+            const res = await onVerifyTeacherCode(teacherCodeInput);
+            setIsVerifyingTeacherCode(false);
+            if (res.ok && res.teacher) {
+              setVerifiedTeacherPreview(res.teacher);
+            } else {
+              setTeacherLinkFeedback({ ok: false, text: res.message });
+            }
+          }}
+          className="mt-4 flex flex-col gap-2.5 sm:flex-row sm:items-center"
+        >
+          <input
+            type="text"
+            value={teacherCodeInput}
+            onChange={(e) => {
+              setTeacherCodeInput(e.target.value.toUpperCase());
+              setTeacherLinkFeedback(null);
+            }}
+            placeholder="Enter Teacher Class Code (e.g. TCH-7K9M2P)"
+            className="min-h-[44px] flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 font-mono text-sm font-semibold text-slate-900 uppercase placeholder:font-sans placeholder:normal-case placeholder:font-normal focus:border-teal-600 focus:bg-white focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={isVerifyingTeacherCode || !teacherCodeInput.trim()}
+            className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2 text-xs font-bold text-white hover:bg-teal-800 disabled:opacity-60 whitespace-nowrap shrink-0"
+          >
+            <GraduationCap className="h-4 w-4" />
+            <span>{isVerifyingTeacherCode ? 'Verifying...' : 'Verify Teacher Code'}</span>
+          </button>
+        </form>
+
+        {verifiedTeacherPreview && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-bold text-emerald-900">
+                  Teacher Verified · Review Before Linking
+                </p>
+                <p className="mt-1 text-sm font-bold text-slate-900">
+                  {verifiedTeacherPreview.fullName} ·{' '}
+                  <span className="font-mono text-teal-800">
+                    {verifiedTeacherPreview.teacherCode}
+                  </span>
+                </p>
+                <p className="mt-0.5 text-xs text-slate-700">
+                  {verifiedTeacherPreview.school} · Grade {verifiedTeacherPreview.grade} (
+                  {verifiedTeacherPreview.classStream})
+                  {verifiedTeacherPreview.tscNumber
+                    ? ` · TSC ${verifiedTeacherPreview.tscNumber}`
+                    : ''}
+                </p>
+                <p className="mt-0.5 text-xs text-slate-600">
+                  Subjects: {verifiedTeacherPreview.subjects.join(', ')}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setVerifiedTeacherPreview(null)}
+                  className="min-h-[40px] rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLinkTeacherToChild(selectedChild.id, verifiedTeacherPreview);
+                    setTeacherLinkFeedback({
+                      ok: true,
+                      text: `Linked ${verifiedTeacherPreview.fullName} (${verifiedTeacherPreview.teacherCode}) to ${selectedChild.name}.`,
+                    });
+                    setVerifiedTeacherPreview(null);
+                    setTeacherCodeInput('');
+                  }}
+                  className="min-h-[40px] rounded-xl bg-emerald-700 px-4 py-1.5 text-xs font-bold text-white hover:bg-emerald-800"
+                >
+                  Confirm &amp; Link Class
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {teacherLinkFeedback && (
+          <p
+            className={`mt-3 text-xs font-semibold ${
+              teacherLinkFeedback.ok ? 'text-emerald-700' : 'text-rose-700'
+            }`}
+          >
+            {teacherLinkFeedback.text}
+          </p>
+        )}
+
+        <div className="mt-4">
+          {(selectedChild.linkedTeacherCodes || []).length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+              No teachers linked for {selectedChild.name} yet. Ask your child&apos;s real class
+              teacher for their <span className="font-mono font-semibold">TCH-...</span> Class Code
+              above. Until linked, {selectedChild.name.split(' ')[0]} learns safely from the
+              built-in KICD CBC curriculum.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 rounded-2xl border border-slate-200">
+              {(selectedChild.linkedTeacherCodes || []).map((code) => {
+                const meta = (selectedChild.linkedTeachers || []).find(
+                  (m) => m.teacherCode === code
+                );
+                return (
+                  <div
+                    key={code}
+                    className="flex flex-col gap-2 p-3.5 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-900">
+                        <span className="font-mono text-teal-800">{code}</span>
+                        {meta ? ` · ${meta.fullName}` : ' · Linked Class Teacher'}
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        {meta
+                          ? `${meta.school} · Grade ${meta.grade} · ${meta.subjects.join(', ')}`
+                          : 'Synced via pairing code — assignments enabled for this teacher'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onUnlinkTeacherFromChild(selectedChild.id, code);
+                        setTeacherLinkFeedback({
+                          ok: true,
+                          text: `Unlinked ${code}. Assignments from this teacher will no longer show for ${selectedChild.name}.`,
+                        });
+                      }}
+                      className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100 shrink-0"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Unlink</span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Main Two-Column Controls & Analytics */}

@@ -56,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.somatime.app.data.AssignmentUploadParser
 import com.somatime.app.data.CbcCurriculumRepository
+import com.somatime.app.data.FirestoreSyncClient
 import com.somatime.app.data.LessonCompletionResult
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.data.SomaTimeUiState
@@ -130,8 +131,16 @@ fun ChildModeScreen(
     }
     val learnerGrade = child.grade
     val isLocked = child.isLocked || child.availableScreenSeconds <= 0
+    val linkedTeacherCodes = child.linkedTeacherCodes
+        .map { FirestoreSyncClient.normalizeTeacherCode(it) }
+        .filter { FirestoreSyncClient.isValidTeacherCode(it) }
+        .toSet()
     val pendingAssignments = uiState.assignments.filter {
-        it.grade == learnerGrade && child.id !in it.completedByChildIds
+        val assignCode = FirestoreSyncClient.normalizeTeacherCode(it.teacherCode)
+        it.grade == learnerGrade &&
+            child.id !in it.completedByChildIds &&
+            assignCode.isNotEmpty() &&
+            assignCode in linkedTeacherCodes
     }
     val gradeLessons = CbcCurriculumRepository.lessons.filter { it.grade == learnerGrade }
     val hasMandatoryLessonForGrade = child.mandatorySubjects.isNotEmpty() &&

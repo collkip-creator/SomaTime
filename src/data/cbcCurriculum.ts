@@ -895,8 +895,12 @@ export function generatePairingCode(): string {
 }
 
 export function generateTeacherCode(): string {
-  const digits = Math.floor(1000 + Math.random() * 9000);
-  return `TCH-${digits}`;
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let suffix = '';
+  for (let i = 0; i < 6; i += 1) {
+    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `TCH-${suffix}`;
 }
 
 export function getCatalogTrackingKey(
@@ -1170,6 +1174,18 @@ export const INITIAL_CHILDREN: ChildProfile[] = [
     licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
     licenseExpiresAt: null,
     licensePaymentRef: null,
+    linkedTeacherCodes: ['TCH-4821'],
+    linkedTeachers: [
+      {
+        teacherCode: 'TCH-4821',
+        fullName: 'Ms. Grace Njeri',
+        school: 'Nairobi Primary School',
+        tscNumber: 'TSC-482910',
+        grade: 6,
+        classStream: 'Grade 6 East - Nairobi Primary',
+        subjects: ['Social Studies', 'Mathematics'],
+      },
+    ],
   },
   {
     id: 'brian',
@@ -1226,7 +1242,19 @@ export const INITIAL_CHILDREN: ChildProfile[] = [
     licenseActive: true,
     licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
     licenseExpiresAt: buildLicenseExpiryIso(30),
-    licensePaymentRef: 'MPESA-SOMA8009',
+    licensePaymentRef: 'PSK-SOMA8009',
+    linkedTeacherCodes: ['TCH-4821'],
+    linkedTeachers: [
+      {
+        teacherCode: 'TCH-4821',
+        fullName: 'Ms. Grace Njeri',
+        school: 'Nairobi Primary School',
+        tscNumber: 'TSC-482910',
+        grade: 6,
+        classStream: 'Grade 6 East - Nairobi Primary',
+        subjects: ['Social Studies', 'Mathematics'],
+      },
+    ],
   },
 ];
 
@@ -1234,12 +1262,15 @@ export const INITIAL_ASSIGNMENTS: TeacherAssignment[] = [
   {
     id: 'assign-g6-sst',
     classStream: 'Grade 6 East - Nairobi Primary',
+    school: 'Nairobi Primary School',
     grade: 6,
     learningArea: 'Social Studies',
     strand: 'Resources & Economic Activities',
     subStrand: 'Cash Crops & Port Trade',
     lessonId: 'g6-sst-resources',
     title: 'Kenyan Agriculture & Trade Corridors',
+    teacherName: 'Ms. Grace Njeri',
+    teacherCode: 'TCH-4821',
     dueLabel: 'Today · 5:00 PM',
     pushedAt: '08:00 AM',
     completedByChildIds: [],

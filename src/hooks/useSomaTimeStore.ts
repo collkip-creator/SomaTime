@@ -15,13 +15,14 @@ import {
 import {
   fetchAndPairFromCloud,
   loginTeacherFromCloud,
+  lookupTeacherByCodeFromCloud,
   normalizePairingCode,
   normalizeTeacherCode,
   publishPairingToCloud,
-  publishSchoolGradeAssignmentToCloud,
+  publishTeacherAssignmentToCloud,
   registerTeacherInCloud,
+  subscribeLinkedTeacherAssignments,
   subscribePairingSession,
-  subscribeSchoolGradeAssignments,
   syncLearnerStateToCloud,
   type CloudPairingDoc,
 } from '../lib/firebase';
@@ -32,6 +33,7 @@ import type {
   ChildProfile,
   ClassStudentRecord,
   LearningArea,
+  LinkedTeacherSummary,
   ParentAccount,
   RoleView,
   TeacherAccount,
@@ -104,6 +106,8 @@ function loadState(): PersistedState {
         licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
         licenseExpiresAt: c.licenseExpiresAt ?? null,
         licensePaymentRef: c.licensePaymentRef ?? null,
+        linkedTeacherCodes: Array.isArray(c.linkedTeacherCodes) ? c.linkedTeacherCodes : [],
+        linkedTeachers: Array.isArray(c.linkedTeachers) ? c.linkedTeachers : [],
       })),
       assignments: Array.isArray(parsed.assignments) ? parsed.assignments : [],
       classRoster: Array.isArray(parsed.classRoster) ? parsed.classRoster : [],
@@ -167,6 +171,10 @@ function cloudDocToChildProfile(
     licensePlanLabel: existing?.licensePlanLabel ?? MONTHLY_LICENSE_PLAN_LABEL,
     licenseExpiresAt: cloud.licenseExpiresAt || existing?.licenseExpiresAt || null,
     licensePaymentRef: cloud.licensePaymentRef || existing?.licensePaymentRef || null,
+    linkedTeacherCodes: Array.isArray(cloud.linkedTeacherCodes)
+      ? cloud.linkedTeacherCodes.map((c) => normalizeTeacherCode(c)).filter(Boolean)
+      : existing?.linkedTeacherCodes ?? [],
+    linkedTeachers: existing?.linkedTeachers ?? [],
   };
 }
 
@@ -246,6 +254,13 @@ export function useSomaTimeStore() {
           );
           if (idx === -1) return prev;
           const current = prev.children[idx];
+          const cloudTeacherCodes = Array.isArray(cloud.linkedTeacherCodes)
+            ? cloud.linkedTeacherCodes.map((c) => normalizeTeacherCode(c)).filter(Boolean)
+            : current.linkedTeacherCodes;
+          const sameLinks =
+            cloudTeacherCodes.length === current.linkedTeacherCodes.length &&
+            cloudTeacherCodes.every((c, i) => c === current.linkedTeacherCodes[i]);
+
           const sameState =
             current.isPaired === cloud.isPaired &&
             current.isLocked === cloud.isLocked &&
@@ -255,6 +270,7 @@ export function useSomaTimeStore() {
             current.learnedMinutesToday === cloud.learnedMinutesToday &&
             current.requireParentApproval === cloud.requireParentApproval &&
             current.licenseActive === (cloud.licenseActive ?? current.licenseActive) &&
+            sameLinks &&
             Math.abs(current.availableScreenSeconds - cloud.availableScreenSeconds) <= 2 &&
             prev.parentAccount.pin === cloud.parentPin;
 
@@ -281,40 +297,49 @@ export function useSomaTimeStore() {
     return () => unsubscribe();
   }, [selectedChild?.pairingCode]);
 
-  // Live Firestore real-time subscription for assignments matching the learner's school and grade
-  useEffect(() => {
-    const school = selectedChild?.school;
-    const grade = selectedChild?.grade;
-    if (!school || !grade) return;
+  // Live Firestore real-time subscriptions ONLY for Teacher Class Codes explicitly linked by the parent
+  const linkedCodesKey = (selectedChild?.linkedTeacherCodes ?? [])
+    .map((c) => normalizeTeacherCode(c))
+    .filter(Boolean)
+    .sort()
+    .join(',');
 
-    const unsubscribe = subscribeSchoolGradeAssignments(
-      school,
-      grade,
-      (cloudAssignments) => {
-        if (cloudAssignments.length === 0) return;
-        setState((prev) => {
-          const existingById = new Map(prev.assignments.map((a) => [a.id, a]));
-          const mergedCloud = cloudAssignments.map((ca) => {
-            const prevItem = existingById.get(ca.id);
-            return prevItem
-              ? { ...ca, completedByChildIds: prevItem.completedByChildIds }
-              : ca;
+  useEffect(() => {
+    const codes = linkedCodesKey ? linkedCodesKey.split(',').filter(Boolean) : [];
+    if (codes.length === 0) return;
+
+    const unsubs = codes.map((teacherCode) =>
+      subscribeLinkedTeacherAssignments(
+        teacherCode,
+        (code, cloudAssignments) => {
+          setState((prev) => {
+            const existingById = new Map(prev.assignments.map((a) => [a.id, a]));
+            const mergedCloud = cloudAssignments.map((ca) => {
+              const prevItem = existingById.get(ca.id);
+              return prevItem
+                ? { ...ca, completedByChildIds: prevItem.completedByChildIds }
+                : ca;
+            });
+            const cloudIds = new Set(mergedCloud.map((a) => a.id));
+            const remainingLocal = prev.assignments.filter(
+              (a) => !cloudIds.has(a.id) && normalizeTeacherCode(a.teacherCode || '') !== code
+            );
+            return {
+              ...prev,
+              assignments: [...mergedCloud, ...remainingLocal],
+            };
           });
-          const cloudIds = new Set(mergedCloud.map((a) => a.id));
-          const remainingLocal = prev.assignments.filter((a) => !cloudIds.has(a.id));
-          return {
-            ...prev,
-            assignments: [...mergedCloud, ...remainingLocal],
-          };
-        });
-      },
-      () => {
-        // Silently tolerate transient offline listener errors
-      }
+        },
+        () => {
+          // Silently tolerate transient offline listener errors
+        }
+      )
     );
 
-    return () => unsubscribe();
-  }, [selectedChild?.school, selectedChild?.grade]);
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [linkedCodesKey]);
 
   // Live 1-second background monitor ticker checking available watch minutes
   useEffect(() => {
@@ -423,13 +448,13 @@ export function useSomaTimeStore() {
   const activateChildLicense = useCallback(
     (
       childId: string,
-      payerPhone?: string,
+      payerContact?: string,
       explicitReceiptRef?: string
     ): { ok: boolean; receiptRef: string; expiresAt: string } => {
       const expiresAt = buildLicenseExpiryIso(30);
       const token = Math.random().toString(36).slice(2, 6).toUpperCase();
-      const suffix = (payerPhone || '').replace(/\D/g, '').slice(-4) || token;
-      const receiptRef = (explicitReceiptRef || `MPESA-${suffix}${token}`).slice(0, 24);
+      const cleaned = (payerContact || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() || token;
+      const receiptRef = (explicitReceiptRef || `PSK-${cleaned}${token}`).slice(0, 24);
 
       let updatedTarget: ChildProfile | null = null;
       setState((prev) => ({
@@ -452,7 +477,7 @@ export function useSomaTimeStore() {
           .then(() => {
             setCloudSyncOk(true);
             setCloudSyncMessage(
-              `M-Pesa License active (${receiptRef}) ✓ · Code ${(updatedTarget as ChildProfile).pairingCode} ready for learner phone`
+              `Paystack License active (${receiptRef}) ✓ · Code ${(updatedTarget as ChildProfile).pairingCode} ready for learner phone`
             );
           })
           .catch(() => {});
@@ -464,14 +489,14 @@ export function useSomaTimeStore() {
   );
 
   const activateAllUnpaidLicenses = useCallback(
-    (payerPhone?: string, explicitReceiptRef?: string): number => {
+    (payerContact?: string, explicitReceiptRef?: string): number => {
       const unpaid = stateRef.current.children.filter((c) => !c.licenseActive);
       if (unpaid.length === 0) return 0;
 
       const expiresAt = buildLicenseExpiryIso(30);
       const token = Math.random().toString(36).slice(2, 6).toUpperCase();
-      const suffix = (payerPhone || '').replace(/\D/g, '').slice(-4) || token;
-      const receiptRef = (explicitReceiptRef || `MPESA-FAM${suffix}`).slice(0, 24);
+      const cleaned = (payerContact || '').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() || token;
+      const receiptRef = (explicitReceiptRef || `PSK-FAM${cleaned}`).slice(0, 24);
 
       const updatedList: ChildProfile[] = [];
       setState((prev) => ({
@@ -574,6 +599,8 @@ export function useSomaTimeStore() {
         licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
         licenseExpiresAt: null,
         licensePaymentRef: null,
+        linkedTeacherCodes: [],
+        linkedTeachers: [],
       };
 
       setState((prev) => ({
@@ -744,6 +771,8 @@ export function useSomaTimeStore() {
         licensePlanLabel: MONTHLY_LICENSE_PLAN_LABEL,
         licenseExpiresAt: null,
         licensePaymentRef: null,
+        linkedTeacherCodes: [],
+        linkedTeachers: [],
       };
       setState((prev) => ({
         ...prev,
@@ -1069,6 +1098,127 @@ export function useSomaTimeStore() {
     []
   );
 
+  const verifyTeacherClassCode = useCallback(
+    async (
+      rawCode: string
+    ): Promise<{ ok: boolean; teacher?: LinkedTeacherSummary; message: string }> => {
+      const code = normalizeTeacherCode(rawCode);
+      if (!code) {
+        return { ok: false, message: 'Enter a Teacher Class Code (e.g. TCH-7K9M2P).' };
+      }
+
+      try {
+        const cloudRes = await lookupTeacherByCodeFromCloud(code);
+        if (cloudRes.ok && cloudRes.teacher) {
+          return cloudRes;
+        }
+        const localMatch = stateRef.current.registeredTeachers.find(
+          (t) => normalizeTeacherCode(t.teacherCode) === code
+        );
+        if (localMatch) {
+          return {
+            ok: true,
+            message: `Verified ${localMatch.fullName} at ${localMatch.school}`,
+            teacher: {
+              teacherCode: localMatch.teacherCode,
+              fullName: localMatch.fullName,
+              school: localMatch.school,
+              tscNumber: localMatch.tscNumber || undefined,
+              grade: localMatch.grade,
+              classStream: localMatch.classStream,
+              subjects: localMatch.subjects,
+            },
+          };
+        }
+        return cloudRes;
+      } catch {
+        const localMatch = stateRef.current.registeredTeachers.find(
+          (t) => normalizeTeacherCode(t.teacherCode) === code
+        );
+        if (localMatch) {
+          return {
+            ok: true,
+            message: `Verified ${localMatch.fullName} at ${localMatch.school} (local profile)`,
+            teacher: {
+              teacherCode: localMatch.teacherCode,
+              fullName: localMatch.fullName,
+              school: localMatch.school,
+              tscNumber: localMatch.tscNumber || undefined,
+              grade: localMatch.grade,
+              classStream: localMatch.classStream,
+              subjects: localMatch.subjects,
+            },
+          };
+        }
+        return {
+          ok: false,
+          message: `Unable to verify "${code}" from Cloud right now. Check connection and try again.`,
+        };
+      }
+    },
+    []
+  );
+
+  const linkTeacherToChild = useCallback(
+    (childId: string, teacher: LinkedTeacherSummary) => {
+      const code = normalizeTeacherCode(teacher.teacherCode);
+      if (!code) return;
+      let updatedTarget: ChildProfile | null = null;
+      setState((prev) => ({
+        ...prev,
+        children: prev.children.map((c) => {
+          if (c.id !== childId) return c;
+          const nextCodes = Array.from(
+            new Set([code, ...(c.linkedTeacherCodes || []).map((x) => normalizeTeacherCode(x))])
+          ).slice(0, 10);
+          const existingMeta = c.linkedTeachers || [];
+          const nextMeta = [
+            { ...teacher, teacherCode: code },
+            ...existingMeta.filter((m) => normalizeTeacherCode(m.teacherCode) !== code),
+          ].slice(0, 10);
+          updatedTarget = {
+            ...c,
+            linkedTeacherCodes: nextCodes,
+            linkedTeachers: nextMeta,
+          };
+          return updatedTarget;
+        }),
+      }));
+      if (updatedTarget) {
+        void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+          () => {}
+        );
+      }
+    },
+    []
+  );
+
+  const unlinkTeacherFromChild = useCallback((childId: string, teacherCode: string) => {
+    const code = normalizeTeacherCode(teacherCode);
+    let updatedTarget: ChildProfile | null = null;
+    setState((prev) => ({
+      ...prev,
+      children: prev.children.map((c) => {
+        if (c.id !== childId) return c;
+        updatedTarget = {
+          ...c,
+          linkedTeacherCodes: (c.linkedTeacherCodes || []).filter(
+            (x) => normalizeTeacherCode(x) !== code
+          ),
+          linkedTeachers: (c.linkedTeachers || []).filter(
+            (m) => normalizeTeacherCode(m.teacherCode) !== code
+          ),
+        };
+        return updatedTarget;
+      }),
+    }));
+    if (updatedTarget) {
+      void publishPairingToCloud(updatedTarget, stateRef.current.parentAccount.pin).catch(
+        () => {}
+      );
+    }
+  }, []);
+
   const registerTeacher = useCallback(
     async (input: {
       fullName: string;
@@ -1079,6 +1229,7 @@ export function useSomaTimeStore() {
       grade: number;
       classStream: string;
       preserveRoleView?: boolean;
+      autoLinkOwnedChildren?: boolean;
     }): Promise<TeacherAccount> => {
       const code = generateTeacherCode();
       const cleanSchool = input.school.trim() || 'Nairobi Primary School';
@@ -1109,15 +1260,48 @@ export function useSomaTimeStore() {
         // Retain local profile if offline; user can still use teacher portal immediately
       }
 
-      setState((prev) => ({
-        ...prev,
-        roleView: input.preserveRoleView ? prev.roleView : 'teacher',
-        teacherAccount: saved,
-        registeredTeachers: [
-          saved,
-          ...prev.registeredTeachers.filter((t) => t.teacherCode !== saved.teacherCode),
-        ],
-      }));
+      const summary: LinkedTeacherSummary = {
+        teacherCode: saved.teacherCode,
+        fullName: saved.fullName,
+        school: saved.school,
+        tscNumber: saved.tscNumber || undefined,
+        grade: saved.grade,
+        classStream: saved.classStream,
+        subjects: saved.subjects,
+      };
+
+      const linkedChildrenToSync: ChildProfile[] = [];
+      setState((prev) => {
+        const nextChildren = input.autoLinkOwnedChildren
+          ? prev.children.map((c) => {
+              const nextCodes = Array.from(
+                new Set([saved.teacherCode, ...(c.linkedTeacherCodes || [])])
+              ).slice(0, 10);
+              const nextMeta = [
+                summary,
+                ...(c.linkedTeachers || []).filter((m) => m.teacherCode !== saved.teacherCode),
+              ].slice(0, 10);
+              const updated = { ...c, linkedTeacherCodes: nextCodes, linkedTeachers: nextMeta };
+              linkedChildrenToSync.push(updated);
+              return updated;
+            })
+          : prev.children;
+
+        return {
+          ...prev,
+          roleView: input.preserveRoleView ? prev.roleView : 'teacher',
+          teacherAccount: saved,
+          registeredTeachers: [
+            saved,
+            ...prev.registeredTeachers.filter((t) => t.teacherCode !== saved.teacherCode),
+          ],
+          children: nextChildren,
+        };
+      });
+
+      linkedChildrenToSync.forEach((c) => {
+        void publishPairingToCloud(c, stateRef.current.parentAccount.pin).catch(() => {});
+      });
 
       return saved;
     },
@@ -1211,8 +1395,9 @@ export function useSomaTimeStore() {
       customQuestions?: ActivityQuestion[];
     }) => {
       const activeTeacher = stateRef.current.teacherAccount;
+      if (!activeTeacher) return;
       const targetSchool =
-        input.school?.trim() || activeTeacher?.school || 'Nairobi Primary School';
+        input.school?.trim() || activeTeacher.school || 'Nairobi Primary School';
       const matchingLesson =
         CBC_LESSONS.find(
           (l) => l.learningArea === input.learningArea && l.grade === input.grade
@@ -1252,8 +1437,8 @@ export function useSomaTimeStore() {
         attachmentMimeType: input.attachmentMimeType?.trim() || undefined,
         attachmentSizeBytes: input.attachmentSizeBytes,
         customQuestions: hasCustomQuestions ? input.customQuestions : undefined,
-        teacherName: activeTeacher?.fullName || 'Class Teacher',
-        teacherCode: activeTeacher?.teacherCode,
+        teacherName: activeTeacher.fullName || 'Class Teacher',
+        teacherCode: activeTeacher.teacherCode,
         dueLabel: isCustom ? 'Custom Teacher Task · Priority' : 'Priority · Before Screen Time',
         pushedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         completedByChildIds: [],
@@ -1264,7 +1449,11 @@ export function useSomaTimeStore() {
         assignments: [newAssignment, ...prev.assignments],
       }));
 
-      void publishSchoolGradeAssignmentToCloud(newAssignment, targetSchool).catch(() => {});
+      void publishTeacherAssignmentToCloud(
+        newAssignment,
+        activeTeacher.teacherCode,
+        targetSchool
+      ).catch(() => {});
     },
     []
   );
@@ -1347,6 +1536,9 @@ export function useSomaTimeStore() {
     recordDisplayedAssignment,
     completeLesson,
     resolveApproval,
+    verifyTeacherClassCode,
+    linkTeacherToChild,
+    unlinkTeacherFromChild,
     registerTeacher,
     loginTeacher,
     logoutTeacher,

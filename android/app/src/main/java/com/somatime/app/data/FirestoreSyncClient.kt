@@ -3,6 +3,7 @@ package com.somatime.app.data
 import com.somatime.app.model.ChildProfile
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
+import com.somatime.app.model.LinkedTeacherSummary
 import com.somatime.app.model.QuestionType
 import com.somatime.app.model.QuizQuestion
 import com.somatime.app.model.TeacherAccount
@@ -42,6 +43,7 @@ data class CloudPairingData(
     val isPaired: Boolean,
     val ownerUid: String,
     val completedLessonIds: List<String>,
+    val linkedTeacherCodes: List<String> = emptyList(),
     val licenseActive: Boolean = false,
     val licenseExpiresAt: String = "",
     val licensePaymentRef: String = ""
@@ -81,16 +83,6 @@ object FirestoreSyncClient {
     }
 
     fun isValidTeacherCode(code: String): Boolean = TEACHER_CODE_REGEX.matches(code)
-
-    fun buildSchoolGradeKey(school: String, grade: Int): String {
-        val safeGrade = grade.coerceIn(1, 12)
-        val slug = school.trim().lowercase(Locale.US)
-            .replace(Regex("[^a-z0-9]+"), "-")
-            .trim('-')
-            .take(100)
-        val finalSlug = if (slug.length >= 2) slug else "nairobi-primary"
-        return "g$safeGrade-$finalSlug"
-    }
 
     fun normalizeCode(raw: String): String {
         val cleaned = raw.trim().uppercase(Locale.US).replace(Regex("[^A-Z0-9-\\s]"), "")
@@ -139,9 +131,10 @@ object FirestoreSyncClient {
                 val updateFields = listOf(
                     "childName", "grade", "school", "classStream", "deviceMode",
                     "parentPin", "dailyCapMins", "exchangeRateMins", "mandatorySubjects",
-                    "requireParentApproval", "availableScreenSeconds", "usedScreenTodayMins",
-                    "learnedMinutesToday", "isLocked", "isPaired", "completedLessonIds",
-                    "licenseActive", "licenseExpiresAt", "licensePaymentRef", "updatedAt"
+                    "linkedTeacherCodes", "requireParentApproval", "availableScreenSeconds",
+                    "usedScreenTodayMins", "learnedMinutesToday", "isLocked", "isPaired",
+                    "completedLessonIds", "licenseActive", "licenseExpiresAt",
+                    "licensePaymentRef", "updatedAt"
                 )
                 val maskParams = updateFields.joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
                 val url = "$BASE_URL/pairings/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
@@ -288,6 +281,11 @@ object FirestoreSyncClient {
         val isPaired = readBool(fields, "isPaired", false)
         val ownerUid = readStr(fields, "ownerUid", "device_parent")
         val completedLessonIds = readStrArray(fields, "completedLessonIds")
+        val linkedTeacherCodes = readStrArray(fields, "linkedTeacherCodes")
+            .map(::normalizeTeacherCode)
+            .filter(::isValidTeacherCode)
+            .distinct()
+            .take(10)
         val licenseActive = readBool(fields, "licenseActive", false)
         val licenseExpiresAt = readStr(fields, "licenseExpiresAt", "")
         val licensePaymentRef = readStr(fields, "licensePaymentRef", "")
@@ -315,6 +313,7 @@ object FirestoreSyncClient {
                 isPaired = isPaired,
                 ownerUid = ownerUid,
                 completedLessonIds = completedLessonIds,
+                linkedTeacherCodes = linkedTeacherCodes,
                 licenseActive = licenseActive,
                 licenseExpiresAt = licenseExpiresAt,
                 licensePaymentRef = licensePaymentRef
@@ -348,6 +347,16 @@ object FirestoreSyncClient {
         obj.put(
             "mandatorySubjects",
             strArrayVal(child.mandatorySubjects.take(8).map { it.displayName })
+        )
+        obj.put(
+            "linkedTeacherCodes",
+            strArrayVal(
+                child.linkedTeacherCodes
+                    .map(::normalizeTeacherCode)
+                    .filter(::isValidTeacherCode)
+                    .distinct()
+                    .take(10)
+            )
         )
         obj.put("requireParentApproval", boolVal(child.requireParentApproval))
         obj.put("availableScreenSeconds", intVal(child.availableScreenSeconds.coerceIn(0, 28800)))
@@ -586,15 +595,71 @@ object FirestoreSyncClient {
             CloudOpResult(ok = true, data = account, httpCode = res.code)
         }
 
-    suspend fun publishSchoolGradeAssignment(
+    suspend fun lookupTeacherByCode(rawCode: String): CloudOpResult<LinkedTeacherSummary> =
+        withContext(Dispatchers.IO) {
+            val code = normalizeTeacherCode(rawCode)
+            if (!isValidTeacherCode(code)) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    errorMessage = "Enter a valid Teacher Class Code like TCH-7K4M9Q."
+                )
+            }
+
+            val url = "$BASE_URL/teachers/${enc(code)}?key=${enc(API_KEY)}"
+            val res = request("GET", url, null, patchOverride = false)
+            if (res.code == 404) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = 404,
+                    errorMessage = "No registered teacher found for \"$code\". Confirm the exact code with your child's teacher."
+                )
+            }
+            if (res.code !in 200..299 || res.body.isBlank()) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = res.code,
+                    errorMessage = formatHttpFailure(res)
+                )
+            }
+
+            val root = runCatching { JSONObject(res.body) }.getOrNull()
+                ?: return@withContext CloudOpResult(ok = false, errorMessage = "Malformed cloud response.")
+            val fields = root.optJSONObject("fields")
+                ?: return@withContext CloudOpResult(ok = false, errorMessage = "Missing teacher profile fields.")
+
+            val subjectNames = readStrArray(fields, "subjects")
+            val subjects = subjectNames.mapNotNull { label ->
+                LearningArea.entries.firstOrNull { it.displayName == label }
+            }.ifEmpty { listOf(LearningArea.MATHEMATICS) }
+
+            val summary = LinkedTeacherSummary(
+                teacherCode = readStr(fields, "teacherCode", code),
+                fullName = readStr(fields, "fullName", "Teacher"),
+                school = readStr(fields, "school", "Nairobi Primary School"),
+                tscNumber = readStr(fields, "tscNumber", ""),
+                grade = readInt(fields, "grade", 6).coerceIn(1, 12),
+                classStream = readStr(fields, "classStream", "Grade 6 East"),
+                subjects = subjects
+            )
+            CloudOpResult(ok = true, data = summary, httpCode = res.code)
+        }
+
+    suspend fun publishTeacherAssignment(
         assignment: TeacherAssignment,
+        teacherCode: String,
         schoolName: String
     ): CloudOpResult<Boolean> = withContext(Dispatchers.IO) {
+        val code = normalizeTeacherCode(teacherCode)
+        if (!isValidTeacherCode(code)) {
+            return@withContext CloudOpResult(
+                ok = false,
+                errorMessage = "Invalid Teacher Class Code ($code)."
+            )
+        }
         val safeSchool = schoolName.trim().ifEmpty { assignment.school }.ifEmpty { "Nairobi Primary School" }.take(120)
         val safeGrade = assignment.grade.coerceIn(1, 12)
-        val key = buildSchoolGradeKey(safeSchool, safeGrade)
 
-        val getUrl = "$BASE_URL/school_assignments/${enc(key)}?key=${enc(API_KEY)}"
+        val getUrl = "$BASE_URL/teacher_assignments/${enc(code)}?key=${enc(API_KEY)}"
         val existingRes = request("GET", getUrl, null, patchOverride = false)
         if (existingRes.code !in 200..299 && existingRes.code != 404) {
             return@withContext CloudOpResult(
@@ -644,7 +709,7 @@ object FirestoreSyncClient {
             .put("attachmentSizeBytes", intVal(assignment.attachmentSizeBytes.coerceIn(0L, 10_000_000L).toInt()))
             .put("customQuestions", encodeCustomQuestionsArray(assignment.customQuestions))
             .put("teacherName", strVal(assignment.teacherName.ifEmpty { "Class Teacher" }.take(80)))
-            .put("teacherCode", strVal(assignment.teacherCode.ifEmpty { "TCH-0000" }.take(24)))
+            .put("teacherCode", strVal(code))
             .put("dueLabel", strVal(assignment.dueLabel.take(80)))
             .put("pushedAt", strVal(assignment.pushedAt.take(40)))
         val newEntry = JSONObject().put("mapValue", JSONObject().put("fields", newMapFields))
@@ -672,18 +737,17 @@ object FirestoreSyncClient {
             .put("recentAssignments", JSONObject().put("arrayValue", JSONObject().put("values", nextValues)))
             .put("updatedAt", strVal(nowIso()))
         if (isNew) {
-            fields.put("schoolGradeKey", strVal(key))
-            fields.put("grade", intVal(safeGrade))
+            fields.put("teacherCode", strVal(code))
         }
 
         val body = JSONObject().put("fields", fields).toString()
         val res = if (isNew) {
-            val url = "$BASE_URL/school_assignments?documentId=${enc(key)}&key=${enc(API_KEY)}"
+            val url = "$BASE_URL/teacher_assignments?documentId=${enc(code)}&key=${enc(API_KEY)}"
             request("POST", url, body, patchOverride = false)
         } else {
             val maskParams = listOf("school", "recentAssignments", "updatedAt")
                 .joinToString("&") { "updateMask.fieldPaths=${enc(it)}" }
-            val url = "$BASE_URL/school_assignments/${enc(key)}?$maskParams&key=${enc(API_KEY)}"
+            val url = "$BASE_URL/teacher_assignments/${enc(code)}?$maskParams&key=${enc(API_KEY)}"
             request("POST", url, body, patchOverride = true)
         }
 
@@ -694,12 +758,14 @@ object FirestoreSyncClient {
         }
     }
 
-    suspend fun fetchSchoolGradeAssignments(
-        schoolName: String,
-        grade: Int
+    suspend fun fetchTeacherAssignments(
+        rawTeacherCode: String
     ): CloudOpResult<List<TeacherAssignment>> = withContext(Dispatchers.IO) {
-        val key = buildSchoolGradeKey(schoolName, grade)
-        val url = "$BASE_URL/school_assignments/${enc(key)}?key=${enc(API_KEY)}"
+        val code = normalizeTeacherCode(rawTeacherCode)
+        if (!isValidTeacherCode(code)) {
+            return@withContext CloudOpResult(ok = true, data = emptyList(), httpCode = 400)
+        }
+        val url = "$BASE_URL/teacher_assignments/${enc(code)}?key=${enc(API_KEY)}"
         val res = request("GET", url, null, patchOverride = false)
         if (res.code == 404) {
             return@withContext CloudOpResult(ok = true, data = emptyList(), httpCode = 404)
@@ -714,7 +780,9 @@ object FirestoreSyncClient {
 
         val root = runCatching { JSONObject(res.body) }.getOrNull()
             ?: return@withContext CloudOpResult(ok = false, errorMessage = "Malformed response")
-        val values = root.optJSONObject("fields")
+        val docFields = root.optJSONObject("fields")
+        val docSchool = docFields?.let { readStr(it, "school", "Nairobi Primary School") } ?: "Nairobi Primary School"
+        val values = docFields
             ?.optJSONObject("recentAssignments")
             ?.optJSONObject("arrayValue")
             ?.optJSONArray("values")
@@ -731,12 +799,13 @@ object FirestoreSyncClient {
                 val rawUrl = readStr(f, "attachmentUrl", "")
                 val safeUrl = if (AssignmentUploadParser.isSafeAttachmentUrl(rawUrl)) rawUrl else ""
                 val customQs = decodeCustomQuestionsArray(f)
+                val itemGrade = readInt(f, "grade", 6).coerceIn(1, 12)
                 add(
                     TeacherAssignment(
                         id = readStr(f, "id", "assign-$i"),
-                        classStream = readStr(f, "classStream", "Grade $grade East"),
-                        school = readStr(f, "school", schoolName),
-                        grade = readInt(f, "grade", grade).coerceIn(1, 12),
+                        classStream = readStr(f, "classStream", "Grade $itemGrade East"),
+                        school = readStr(f, "school", docSchool),
+                        grade = itemGrade,
                         learningArea = area,
                         strand = readStr(f, "strand", "Numbers"),
                         subStrand = readStr(f, "subStrand", "Core Strand"),
@@ -750,7 +819,7 @@ object FirestoreSyncClient {
                         attachmentSizeBytes = readInt(f, "attachmentSizeBytes", 0).toLong(),
                         customQuestions = customQs,
                         teacherName = readStr(f, "teacherName", "Class Teacher"),
-                        teacherCode = readStr(f, "teacherCode", ""),
+                        teacherCode = readStr(f, "teacherCode", code).ifEmpty { code },
                         dueLabel = readStr(f, "dueLabel", "Priority · Complete First"),
                         pushedAt = readStr(f, "pushedAt", "Today"),
                         completedByChildIds = emptyList()

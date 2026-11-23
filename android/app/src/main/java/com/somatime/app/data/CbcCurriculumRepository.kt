@@ -9,6 +9,7 @@ import com.somatime.app.model.ChildProfile
 import com.somatime.app.model.ClassStudentRecord
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
+import com.somatime.app.model.LinkedTeacherSummary
 import com.somatime.app.model.MatchingPair
 import com.somatime.app.model.PendingApproval
 import com.somatime.app.model.QuestionType
@@ -637,8 +638,9 @@ object CbcCurriculumRepository {
     }
 
     fun generateTeacherCode(): String {
-        val num = (1000..9999).random()
-        return "TCH-$num"
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        val suffix = (1..6).map { alphabet.random() }.joinToString("")
+        return "TCH-$suffix"
     }
 
     fun questionCountForGrade(grade: Int): Int =
@@ -866,7 +868,18 @@ object CbcCurriculumRepository {
             licenseActive = false,
             licensePlanLabel = MONTHLY_LICENSE_PLAN_LABEL,
             licenseExpiresAt = null,
-            licensePaymentRef = null
+            licensePaymentRef = null,
+            linkedTeacherCodes = listOf("TCH-4821"),
+            linkedTeachers = listOf(
+                LinkedTeacherSummary(
+                    teacherCode = "TCH-4821",
+                    fullName = "Ms. Grace Njeri",
+                    school = "Nairobi Primary School",
+                    grade = 6,
+                    classStream = "Grade 6 East - Nairobi Primary",
+                    subjects = listOf(LearningArea.SOCIAL_STUDIES, LearningArea.MATHEMATICS)
+                )
+            )
         ),
         ChildProfile(
             id = "brian",
@@ -919,7 +932,18 @@ object CbcCurriculumRepository {
             licenseActive = true,
             licensePlanLabel = MONTHLY_LICENSE_PLAN_LABEL,
             licenseExpiresAt = buildLicenseExpiryIso(24),
-            licensePaymentRef = "MPESA-SOMA8009"
+            licensePaymentRef = "PSK-SOMA8009",
+            linkedTeacherCodes = listOf("TCH-4821"),
+            linkedTeachers = listOf(
+                LinkedTeacherSummary(
+                    teacherCode = "TCH-4821",
+                    fullName = "Ms. Grace Njeri",
+                    school = "Kilimani Junior School",
+                    grade = 8,
+                    classStream = "Grade 8 North - Kilimani Junior",
+                    subjects = listOf(LearningArea.SOCIAL_STUDIES, LearningArea.MATHEMATICS)
+                )
+            )
         )
     )
 
@@ -933,6 +957,8 @@ object CbcCurriculumRepository {
             subStrand = "Cash Crops & Port Trade",
             lessonId = "g6-sst-resources",
             title = "Kenyan Agriculture & Trade Corridors",
+            teacherName = "Ms. Grace Njeri",
+            teacherCode = "TCH-4821",
             dueLabel = "Today · 5:00 PM",
             pushedAt = "08:00 AM",
             completedByChildIds = emptyList()

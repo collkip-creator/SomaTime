@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   FileText,
   GraduationCap,
@@ -121,6 +122,7 @@ export function TeacherPortal({
   const [rubricFilter, setRubricFilter] = useState<CBCRubric | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [justPushedTitle, setJustPushedTitle] = useState<string>('');
+  const [copiedTeacherCode, setCopiedTeacherCode] = useState(false);
 
   // Custom Assignment Authoring & File Upload state
   const [composerMode, setComposerMode] = useState<'catalog' | 'custom'>('catalog');
@@ -403,6 +405,12 @@ export function TeacherPortal({
   const handlePush = (e: React.FormEvent) => {
     e.preventDefault();
     setBuilderError('');
+    if (!teacherAccount) {
+      setBuilderError(
+        'Sign in or register as a teacher first so your assignments carry your verified Class Code.'
+      );
+      return;
+    }
     const finalStrand = useCustomStrand
       ? customStrand.trim() || selectedStrand
       : selectedStrand;
@@ -579,6 +587,24 @@ export function TeacherPortal({
                 </span>
               ))}
             </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-teal-200/80 pt-3">
+            <p className="text-xs text-teal-950">
+              Share Class Code <span className="font-mono font-bold">{teacherAccount.teacherCode}</span>{' '}
+              with parents — only learners whose parents link this code receive your assignments.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard?.writeText(teacherAccount.teacherCode).catch(() => {});
+                setCopiedTeacherCode(true);
+                window.setTimeout(() => setCopiedTeacherCode(false), 2000);
+              }}
+              className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-teal-300 bg-white px-3 py-1.5 text-xs font-bold text-teal-900 hover:bg-teal-100"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              <span>{copiedTeacherCode ? 'Copied Class Code!' : 'Copy Class Code'}</span>
+            </button>
           </div>
         </div>
       ) : (
@@ -1149,13 +1175,16 @@ export function TeacherPortal({
 
               <button
                 type="submit"
-                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-teal-800"
+                disabled={!teacherAccount}
+                className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-teal-700 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
               >
                 <Send className="h-4 w-4" />
                 <span>
-                  {composerMode === 'custom'
-                    ? 'Publish Custom Assignment & Upload'
-                    : 'Push Assignment to Students'}
+                  {!teacherAccount
+                    ? 'Register or Sign In Above to Push Assignments'
+                    : composerMode === 'custom'
+                      ? 'Publish Custom Assignment & Upload'
+                      : 'Push Assignment to Linked Learners'}
                 </span>
               </button>
             </div>

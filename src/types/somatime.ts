@@ -119,6 +119,18 @@ export interface ChildProfile {
   licensePlanLabel: string;
   licenseExpiresAt: string | null;
   licensePaymentRef: string | null;
+  linkedTeacherCodes: string[];
+  linkedTeachers?: LinkedTeacherSummary[];
+}
+
+export interface LinkedTeacherSummary {
+  teacherCode: string;
+  fullName: string;
+  school: string;
+  tscNumber?: string;
+  grade: number;
+  classStream: string;
+  subjects: LearningArea[];
 }
 
 export interface MatchingPair {

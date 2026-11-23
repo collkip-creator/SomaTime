@@ -39,6 +39,13 @@ service cloud.firestore {
         && code.matches('^SOMA-[A-Z0-9]{4,12}$');
     }
 
+    function isValidTeacherCodeId(code) {
+      return code is string
+        && code.size() >= 6
+        && code.size() <= 24
+        && code.matches('^TCH-[A-Z0-9]{4,12}$');
+    }
+
     function isValidUserPublic(data, userId) {
       return data.keys().hasAll(['uid', 'displayName', 'role', 'updatedAt'])
         && data.keys().hasOnly(['uid', 'displayName', 'role', 'updatedAt'])
@@ -71,10 +78,10 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'pairingCode', 'childId', 'childName', 'grade', 'school', 'classStream',
           'deviceMode', 'parentPin', 'dailyCapMins', 'exchangeRateMins',
-          'mandatorySubjects', 'requireParentApproval', 'availableScreenSeconds',
-          'usedScreenTodayMins', 'learnedMinutesToday', 'isLocked', 'isPaired',
-          'ownerUid', 'completedLessonIds', 'licenseActive', 'licenseExpiresAt',
-          'licensePaymentRef', 'updatedAt'
+          'mandatorySubjects', 'linkedTeacherCodes', 'requireParentApproval',
+          'availableScreenSeconds', 'usedScreenTodayMins', 'learnedMinutesToday',
+          'isLocked', 'isPaired', 'ownerUid', 'completedLessonIds',
+          'licenseActive', 'licenseExpiresAt', 'licensePaymentRef', 'updatedAt'
         ])
         && isValidPairingCodeId(data.pairingCode)
         && isValidId(data.childId)
@@ -88,6 +95,11 @@ service cloud.firestore {
         && data.exchangeRateMins is int && data.exchangeRateMins >= 5 && data.exchangeRateMins <= 60
         && data.mandatorySubjects is list && data.mandatorySubjects.size() <= 8
         && (data.mandatorySubjects.size() == 0 || data.mandatorySubjects[0] is string)
+        && (!('linkedTeacherCodes' in data) || (
+          data.linkedTeacherCodes is list
+          && data.linkedTeacherCodes.size() <= 10
+          && (data.linkedTeacherCodes.size() == 0 || isValidTeacherCodeId(data.linkedTeacherCodes[0]))
+        ))
         && data.requireParentApproval is bool
         && data.availableScreenSeconds is int && data.availableScreenSeconds >= 0 && data.availableScreenSeconds <= 28800
         && data.usedScreenTodayMins is int && data.usedScreenTodayMins >= 0 && data.usedScreenTodayMins <= 600
@@ -127,6 +139,7 @@ service cloud.firestore {
         'dailyCapMins',
         'exchangeRateMins',
         'mandatorySubjects',
+        'linkedTeacherCodes',
         'requireParentApproval',
         'availableScreenSeconds',
         'usedScreenTodayMins',
@@ -139,20 +152,6 @@ service cloud.firestore {
         'licensePaymentRef',
         'updatedAt'
       ]);
-    }
-
-    function isValidTeacherCodeId(code) {
-      return code is string
-        && code.size() >= 6
-        && code.size() <= 24
-        && code.matches('^TCH-[A-Z0-9]{4,12}$');
-    }
-
-    function isValidSchoolGradeId(key) {
-      return key is string
-        && key.size() >= 4
-        && key.size() <= 128
-        && key.matches('^g([1-9]|1[0-2])-[a-z0-9\\-]{2,110}$');
     }
 
     function isValidTeacherProfile(data) {
@@ -177,19 +176,30 @@ service cloud.firestore {
         && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
     }
 
-    function isValidSchoolAssignments(data) {
+    function isValidTeacherAssignments(data) {
       return data.keys().hasAll([
-          'schoolGradeKey', 'school', 'grade', 'recentAssignments', 'updatedAt'
+          'teacherCode', 'school', 'recentAssignments', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'schoolGradeKey', 'school', 'grade', 'recentAssignments', 'updatedAt'
+          'teacherCode', 'school', 'recentAssignments', 'updatedAt'
         ])
-        && isValidSchoolGradeId(data.schoolGradeKey)
+        && isValidTeacherCodeId(data.teacherCode)
         && data.school is string && data.school.size() >= 2 && data.school.size() <= 120
-        && data.grade is int && data.grade >= 1 && data.grade <= 12
         && data.recentAssignments is list && data.recentAssignments.size() <= 12
         && (data.recentAssignments.size() == 0 || data.recentAssignments[0] is map)
         && data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    function isTeacherRecordAuthorized(teacherCode, expectedSchool) {
+      return exists(/databases/$(database)/documents/teachers/$(teacherCode))
+        && get(/databases/$(database)/documents/teachers/$(teacherCode)).data.school == expectedSchool
+        && (
+          get(/databases/$(database)/documents/teachers/$(teacherCode)).data.ownerUid == 'device_teacher'
+          || (
+            isSignedIn()
+            && get(/databases/$(database)/documents/teachers/$(teacherCode)).data.ownerUid == request.auth.uid
+          )
+        );
     }
 
     match /test/connection {
@@ -241,11 +251,19 @@ service cloud.firestore {
       allow get: if isValidTeacherCodeId(teacherCode);
       allow create: if isValidTeacherCodeId(teacherCode)
         && isValidTeacherProfile(incoming())
-        && incoming().teacherCode == teacherCode;
+        && incoming().teacherCode == teacherCode
+        && (
+          incoming().ownerUid == 'device_teacher'
+          || (isSignedIn() && incoming().ownerUid == request.auth.uid)
+        );
       allow update: if isValidTeacherCodeId(teacherCode)
         && isValidTeacherProfile(incoming())
         && incoming().teacherCode == existing().teacherCode
         && incoming().ownerUid == existing().ownerUid
+        && (
+          existing().ownerUid == 'device_teacher'
+          || (isSignedIn() && existing().ownerUid == request.auth.uid)
+        )
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'fullName', 'school', 'tscNumber', 'teacherPin',
           'subjects', 'grade', 'classStream', 'updatedAt'
@@ -253,20 +271,30 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    match /school_assignments/{schoolGradeKey} {
-      // Deterministic school+grade key prevents open collection listing
+    match /teacher_assignments/{teacherCode} {
+      // Only readable by exact Teacher Code linked by parent; writes require matching existing TeacherProfile
       allow list: if false;
-      allow get: if isValidSchoolGradeId(schoolGradeKey);
-      allow create: if isValidSchoolGradeId(schoolGradeKey)
-        && isValidSchoolAssignments(incoming())
-        && incoming().schoolGradeKey == schoolGradeKey;
-      allow update: if isValidSchoolGradeId(schoolGradeKey)
-        && isValidSchoolAssignments(incoming())
-        && incoming().schoolGradeKey == existing().schoolGradeKey
-        && incoming().grade == existing().grade
+      allow get: if isValidTeacherCodeId(teacherCode);
+      allow create: if isValidTeacherCodeId(teacherCode)
+        && isValidTeacherAssignments(incoming())
+        && incoming().teacherCode == teacherCode
+        && isTeacherRecordAuthorized(teacherCode, incoming().school);
+      allow update: if isValidTeacherCodeId(teacherCode)
+        && isValidTeacherAssignments(incoming())
+        && incoming().teacherCode == existing().teacherCode
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'school', 'recentAssignments', 'updatedAt'
-        ]);
+        ])
+        && isTeacherRecordAuthorized(teacherCode, incoming().school);
+      allow delete: if false;
+    }
+
+    match /school_assignments/{schoolGradeKey} {
+      // Deprecated public school-grade broadcast bucket; locked down to block rogue school impersonation
+      allow list: if false;
+      allow get: if false;
+      allow create: if false;
+      allow update: if false;
       allow delete: if false;
     }
   }

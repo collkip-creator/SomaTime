@@ -21,6 +21,7 @@ import type {
   ChildProfile,
   DeviceMode,
   LearningArea,
+  LinkedTeacherSummary,
   TeacherAccount,
   TeacherAssignment,
 } from '../types/somatime';
@@ -106,6 +107,7 @@ export interface CloudPairingDoc {
   dailyCapMins: number;
   exchangeRateMins: number;
   mandatorySubjects: LearningArea[];
+  linkedTeacherCodes?: string[];
   requireParentApproval: boolean;
   availableScreenSeconds: number;
   usedScreenTodayMins: number;
@@ -177,6 +179,13 @@ function buildPairingPayload(
     dailyCapMins: clampInt(child.dailyCapMins, 15, 300),
     exchangeRateMins: clampInt(child.exchangeRateMins, 5, 60),
     mandatorySubjects: (child.mandatorySubjects || []).slice(0, 8) as LearningArea[],
+    linkedTeacherCodes: Array.from(
+      new Set(
+        (child.linkedTeacherCodes || [])
+          .map((c) => normalizeTeacherCode(c))
+          .filter((c) => isValidTeacherCodeFormat(c))
+      )
+    ).slice(0, 10),
     requireParentApproval: Boolean(child.requireParentApproval),
     availableScreenSeconds: clampInt(child.availableScreenSeconds, 0, 28800),
     usedScreenTodayMins: clampInt(child.usedScreenTodayMins, 0, 600),
@@ -219,6 +228,7 @@ export async function publishPairingToCloud(
         dailyCapMins: payload.dailyCapMins,
         exchangeRateMins: payload.exchangeRateMins,
         mandatorySubjects: payload.mandatorySubjects,
+        linkedTeacherCodes: payload.linkedTeacherCodes ?? [],
         requireParentApproval: payload.requireParentApproval,
         availableScreenSeconds: payload.availableScreenSeconds,
         usedScreenTodayMins: payload.usedScreenTodayMins,
@@ -536,6 +546,46 @@ export async function loginTeacherFromCloud(
   };
 }
 
+export async function lookupTeacherByCodeFromCloud(
+  rawCode: string
+): Promise<{ ok: boolean; teacher?: LinkedTeacherSummary; message: string }> {
+  const code = normalizeTeacherCode(rawCode);
+  if (!isValidTeacherCodeFormat(code)) {
+    return { ok: false, message: 'Enter a valid Teacher Class Code (e.g. TCH-7K9M2P).' };
+  }
+
+  const path = `teachers/${code}`;
+  const docRef = doc(db, 'teachers', code);
+  let snap;
+  try {
+    snap = await getDocFromServer(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+
+  if (!snap.exists()) {
+    return {
+      ok: false,
+      message: `No registered teacher found with Class Code "${code}". Ask your child's teacher to share their exact SomaTime Teacher Code.`,
+    };
+  }
+
+  const data = snap.data() as CloudTeacherDoc;
+  return {
+    ok: true,
+    message: `Verified ${data.fullName} at ${data.school}`,
+    teacher: {
+      teacherCode: data.teacherCode,
+      fullName: data.fullName,
+      school: data.school,
+      tscNumber: data.tscNumber || undefined,
+      grade: clampInt(data.grade, 1, 12),
+      classStream: data.classStream,
+      subjects: (data.subjects || ['Mathematics']) as LearningArea[],
+    },
+  };
+}
+
 function sanitizeCustomQuestions(rawList?: ActivityQuestion[]): Array<Record<string, unknown>> {
   if (!Array.isArray(rawList) || rawList.length === 0) return [];
   return rawList.slice(0, 15).map((q, idx) => ({
@@ -562,18 +612,22 @@ function isSafeCloudAttachmentUrl(url?: string): boolean {
   return trimmed.startsWith('/api/assignments/files/') || trimmed.startsWith('https://');
 }
 
-export async function publishSchoolGradeAssignmentToCloud(
+export async function publishTeacherAssignmentToCloud(
   assignment: TeacherAssignment,
+  teacherCodeRaw: string,
   schoolName: string
 ): Promise<void> {
+  const code = normalizeTeacherCode(teacherCodeRaw || assignment.teacherCode || '');
+  if (!isValidTeacherCodeFormat(code)) {
+    throw new Error('A valid Teacher Code is required to publish assignments.');
+  }
   const safeSchool = (schoolName.trim() || assignment.school || 'Nairobi Primary School').slice(
     0,
     120
   );
   const safeGrade = clampInt(assignment.grade, 1, 12);
-  const schoolGradeKey = buildSchoolGradeKey(safeSchool, safeGrade);
-  const path = `school_assignments/${schoolGradeKey}`;
-  const docRef = doc(db, 'school_assignments', schoolGradeKey);
+  const path = `teacher_assignments/${code}`;
+  const docRef = doc(db, 'teacher_assignments', code);
 
   const cloudItem: Record<string, unknown> = {
     id: assignment.id.slice(0, 80),
@@ -595,7 +649,7 @@ export async function publishSchoolGradeAssignmentToCloud(
     attachmentSizeBytes: clampInt(assignment.attachmentSizeBytes || 0, 0, 10_000_000),
     customQuestions: sanitizeCustomQuestions(assignment.customQuestions),
     teacherName: (assignment.teacherName || 'Teacher').slice(0, 80),
-    teacherCode: (assignment.teacherCode || 'TCH-0000').slice(0, 24),
+    teacherCode: code,
     dueLabel: assignment.dueLabel.slice(0, 80),
     pushedAt: assignment.pushedAt.slice(0, 40),
   };
@@ -611,9 +665,8 @@ export async function publishSchoolGradeAssignmentToCloud(
     ].slice(0, 12);
 
     const payload = {
-      schoolGradeKey,
+      teacherCode: code,
       school: safeSchool,
-      grade: safeGrade,
       recentAssignments: nextItems,
       updatedAt: new Date().toISOString().slice(0, 64),
     };
@@ -632,20 +685,26 @@ export async function publishSchoolGradeAssignmentToCloud(
   }
 }
 
-export function subscribeSchoolGradeAssignments(
-  school: string,
-  grade: number,
-  onData: (assignments: TeacherAssignment[]) => void,
+export function subscribeLinkedTeacherAssignments(
+  rawTeacherCode: string,
+  onData: (teacherCode: string, assignments: TeacherAssignment[]) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
-  const key = buildSchoolGradeKey(school, grade);
-  const path = `school_assignments/${key}`;
-  const docRef = doc(db, 'school_assignments', key);
+  const code = normalizeTeacherCode(rawTeacherCode);
+  if (!isValidTeacherCodeFormat(code)) {
+    return () => {};
+  }
+  const path = `teacher_assignments/${code}`;
+  const docRef = doc(db, 'teacher_assignments', code);
 
   return onSnapshot(
     docRef,
     (snapshot) => {
-      if (!snapshot.exists()) return;
+      if (!snapshot.exists()) {
+        onData(code, []);
+        return;
+      }
+      const docSchool = String(snapshot.data().school || 'Nairobi Primary School');
       const rawList =
         (snapshot.data().recentAssignments as Array<Record<string, unknown>>) || [];
       const mapped: TeacherAssignment[] = rawList.map((item) => {
@@ -671,9 +730,9 @@ export function subscribeSchoolGradeAssignments(
         const rawUrl = item.attachmentUrl ? String(item.attachmentUrl) : '';
         return {
           id: String(item.id || `assign-${Date.now()}`),
-          classStream: String(item.classStream || `Grade ${grade} East`),
-          school: String(item.school || school),
-          grade: Number(item.grade || grade),
+          classStream: String(item.classStream || 'Grade 6 East'),
+          school: String(item.school || docSchool),
+          grade: Number(item.grade || 6),
           learningArea: String(item.learningArea || 'Mathematics') as LearningArea,
           strand: String(item.strand || 'Numbers'),
           subStrand: String(item.subStrand || 'Core Strand'),
@@ -688,13 +747,13 @@ export function subscribeSchoolGradeAssignments(
             typeof item.attachmentSizeBytes === 'number' ? item.attachmentSizeBytes : undefined,
           customQuestions: customQuestions.length > 0 ? customQuestions : undefined,
           teacherName: item.teacherName ? String(item.teacherName) : undefined,
-          teacherCode: item.teacherCode ? String(item.teacherCode) : undefined,
+          teacherCode: normalizeTeacherCode(String(item.teacherCode || code)),
           dueLabel: String(item.dueLabel || 'Priority · Before Screen Time'),
           pushedAt: String(item.pushedAt || 'Today'),
           completedByChildIds: [],
         };
       });
-      onData(mapped);
+      onData(code, mapped);
     },
     (error) => {
       if (onError) {

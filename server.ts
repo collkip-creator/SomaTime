@@ -60,60 +60,42 @@ function verifyMagicBytes(ext: string, buf: Buffer): boolean {
   return true;
 }
 
-interface MpesaCheckoutRecord {
-  checkoutRequestId: string;
-  merchantRequestId: string;
+interface PaystackSessionRecord {
+  reference: string;
   childIds: string[];
   amountKes: number;
+  email: string;
   phoneNumber: string;
   status: 'pending' | 'paid' | 'failed';
-  receiptNumber: string | null;
+  channel: string | null;
+  receiptRef: string | null;
   resultDesc: string;
   createdAtMs: number;
 }
 
-const checkoutSessions = new Map<string, MpesaCheckoutRecord>();
+const paystackSessions = new Map<string, PaystackSessionRecord>();
+const PAYSTACK_CHANNELS = ['mobile_money', 'card'] as const;
 
 function pruneOldSessions(): void {
-  const cutoff = Date.now() - 30 * 60 * 1000;
-  for (const [key, session] of checkoutSessions.entries()) {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [key, session] of paystackSessions.entries()) {
     if (session.createdAtMs < cutoff) {
-      checkoutSessions.delete(key);
+      paystackSessions.delete(key);
     }
   }
 }
 
-function getDarajaConfig() {
-  const env =
-    process.env.MPESA_ENV?.trim().toLowerCase() === 'production' ? 'production' : 'sandbox';
-  const consumerKey = process.env.MPESA_CONSUMER_KEY?.trim() || '';
-  const consumerSecret = process.env.MPESA_CONSUMER_SECRET?.trim() || '';
-  const shortcode = process.env.MPESA_SHORTCODE?.trim() || (env === 'sandbox' ? '174379' : '');
-  const passkey = process.env.MPESA_PASSKEY?.trim() || '';
-  const transactionType =
-    process.env.MPESA_TRANSACTION_TYPE?.trim() === 'CustomerBuyGoodsOnline'
-      ? 'CustomerBuyGoodsOnline'
-      : 'CustomerPayBillOnline';
-  const explicitCallback = process.env.MPESA_CALLBACK_URL?.trim() || '';
+function getPaystackConfig() {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY?.trim() || '';
+  const environment: 'test' | 'live' = secretKey.startsWith('sk_live_') ? 'live' : 'test';
+  const explicitCallback = process.env.PAYSTACK_CALLBACK_URL?.trim() || '';
   const appUrl = process.env.APP_URL?.trim().replace(/\/+$/, '') || '';
-
   const missingVars: string[] = [];
-  if (!consumerKey) missingVars.push('MPESA_CONSUMER_KEY');
-  if (!consumerSecret) missingVars.push('MPESA_CONSUMER_SECRET');
-  if (!shortcode) missingVars.push('MPESA_SHORTCODE');
-  if (!passkey) missingVars.push('MPESA_PASSKEY');
-
-  const baseUrl =
-    env === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
+  if (!secretKey) missingVars.push('PAYSTACK_SECRET_KEY');
 
   return {
-    env,
-    baseUrl,
-    consumerKey,
-    consumerSecret,
-    shortcode,
-    passkey,
-    transactionType,
+    secretKey,
+    environment,
     explicitCallback,
     appUrl,
     missingVars,
@@ -121,29 +103,54 @@ function getDarajaConfig() {
   };
 }
 
-function normalizeKenyaPhone(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const digits = raw.replace(/\D/g, '');
-  if (/^254[71]\d{8}$/.test(digits)) return digits;
-  if (/^0[71]\d{8}$/.test(digits)) return `254${digits.slice(1)}`;
-  if (/^[71]\d{8}$/.test(digits)) return `254${digits}`;
+function resolveHttpsOrigin(req: Request, appUrl: string): string | null {
+  const protoHeader = req.headers['x-forwarded-proto'];
+  const proto = (Array.isArray(protoHeader) ? protoHeader[0] : protoHeader || req.protocol || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host;
+  const host = (Array.isArray(hostHeader) ? hostHeader[0] : hostHeader || '').split(',')[0].trim();
+  const isLocalHost =
+    !host ||
+    host.startsWith('localhost') ||
+    host.startsWith('127.0.0.1') ||
+    host.startsWith('0.0.0.0');
+
+  if (proto === 'https' && !isLocalHost && /^[a-zA-Z0-9.-]+(:[0-9]{1,5})?$/.test(host)) {
+    return `https://${host}`;
+  }
+  if (appUrl.startsWith('https://')) {
+    return appUrl;
+  }
   return null;
 }
 
-function buildDarajaTimestamp(date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const year = date.getUTCFullYear();
-  const month = pad(date.getUTCMonth() + 1);
-  const day = pad(date.getUTCDate());
-  // EAT is UTC+3
-  const eatDate = new Date(date.getTime() + 3 * 60 * 60 * 1000);
-  const eatYear = eatDate.getUTCFullYear();
-  const eatMonth = pad(eatDate.getUTCMonth() + 1);
-  const eatDay = pad(eatDate.getUTCDate());
-  const hours = pad(eatDate.getUTCHours());
-  const mins = pad(eatDate.getUTCMinutes());
-  const secs = pad(eatDate.getUTCSeconds());
-  return `${eatYear || year}${eatMonth || month}${eatDay || day}${hours}${mins}${secs}`;
+function resolvePaystackCallbackUrl(
+  req: Request,
+  explicitCallback: string,
+  appUrl: string,
+  client: 'web' | 'android' = 'web'
+): string | null {
+  if (explicitCallback.startsWith('https://')) {
+    return explicitCallback;
+  }
+  const origin = resolveHttpsOrigin(req, appUrl);
+  return origin ? `${origin}/api/paystack/callback?client=${client}` : null;
+}
+
+function resolvePaystackWebhookUrl(req: Request, appUrl: string): string | null {
+  const origin = resolveHttpsOrigin(req, appUrl);
+  return origin ? `${origin}/api/paystack/webhook` : null;
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function buildLicenseExpiryIso(daysFromNow = 30): string {
@@ -151,49 +158,104 @@ function buildLicenseExpiryIso(daysFromNow = 30): string {
   return dt.toISOString().slice(0, 10);
 }
 
-async function fetchDarajaAccessToken(
-  baseUrl: string,
-  consumerKey: string,
-  consumerSecret: string
-): Promise<string> {
-  const creds = Buffer.from(`${consumerKey}:${consumerSecret}`, 'utf8').toString('base64');
-  const response = await fetch(`${baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Basic ${creds}`,
-      Accept: 'application/json',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`Daraja OAuth failed (HTTP ${response.status})`);
-  }
-  const data = (await response.json()) as { access_token?: string };
-  if (!data.access_token) {
-    throw new Error('Daraja OAuth did not return access_token');
-  }
-  return data.access_token;
+function sanitizeEmail(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw.trim().toLowerCase();
+  if (cleaned.length > 160) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(cleaned)) return null;
+  return cleaned;
 }
 
-function resolveCallbackUrl(req: Request, explicitCallback: string, appUrl: string): string | null {
-  if (explicitCallback.startsWith('https://')) {
-    return explicitCallback;
-  }
-  if (appUrl.startsWith('https://')) {
-    return `${appUrl}/api/mpesa/callback`;
-  }
-  const protoHeader = req.headers['x-forwarded-proto'];
-  const proto = Array.isArray(protoHeader) ? protoHeader[0] : protoHeader || req.protocol;
-  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host;
-  const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader;
-  if (proto === 'https' && host) {
-    return `https://${host}/api/mpesa/callback`;
-  }
+function normalizeKenyaPhoneE164(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const digits = raw.replace(/\D/g, '');
+  if (/^254[71]\d{8}$/.test(digits)) return `+${digits}`;
+  if (/^0[71]\d{8}$/.test(digits)) return `+254${digits.slice(1)}`;
+  if (/^[71]\d{8}$/.test(digits)) return `+254${digits}`;
   return null;
 }
 
 async function startServer(): Promise<void> {
   const app = express();
   app.set('trust proxy', true);
+
+  // Paystack Webhook MUST be mounted before express.json() so raw Buffer signature verification works
+  app.post(
+    '/api/paystack/webhook',
+    express.raw({ type: 'application/json', limit: '512kb' }),
+    (req: Request, res: Response) => {
+      const cfg = getPaystackConfig();
+      if (!cfg.configured) {
+        res.status(503).json({ ok: false, error: 'Paystack webhook not configured.' });
+        return;
+      }
+
+      const rawSig = req.headers['x-paystack-signature'];
+      const signature = Array.isArray(rawSig) ? rawSig[0] : rawSig;
+      if (!signature || typeof signature !== 'string' || !Buffer.isBuffer(req.body)) {
+        res.status(401).json({ ok: false, error: 'Missing Paystack signature.' });
+        return;
+      }
+
+      const expectedHex = crypto
+        .createHmac('sha512', cfg.secretKey)
+        .update(req.body)
+        .digest('hex');
+
+      const sigBuf = Buffer.from(signature.trim(), 'utf8');
+      const expectedBuf = Buffer.from(expectedHex, 'utf8');
+      if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+        res.status(401).json({ ok: false, error: 'Invalid Paystack webhook signature.' });
+        return;
+      }
+
+      let payload: {
+        event?: string;
+        data?: {
+          reference?: string;
+          status?: string;
+          amount?: number;
+          currency?: string;
+          channel?: string;
+          gateway_response?: string;
+        };
+      };
+      try {
+        payload = JSON.parse(req.body.toString('utf8'));
+      } catch {
+        res.status(400).json({ ok: false, error: 'Malformed webhook JSON.' });
+        return;
+      }
+
+      const ref = typeof payload.data?.reference === 'string' ? payload.data.reference.trim() : '';
+      if (ref && /^[a-zA-Z0-9_-]{6,80}$/.test(ref)) {
+        const session = paystackSessions.get(ref);
+        if (session) {
+          const currency = String(payload.data?.currency || '').toUpperCase();
+          const paidSubunits = Number(payload.data?.amount || 0);
+          const expectedSubunits = session.amountKes * 100;
+          if (
+            payload.event === 'charge.success' &&
+            payload.data?.status === 'success' &&
+            currency === 'KES' &&
+            paidSubunits >= expectedSubunits
+          ) {
+            session.status = 'paid';
+            session.channel = typeof payload.data?.channel === 'string' ? payload.data.channel : null;
+            session.receiptRef = ref.slice(0, 24);
+            session.resultDesc =
+              payload.data?.gateway_response || 'Payment confirmed via Paystack webhook';
+          } else if (payload.event === 'charge.failed') {
+            session.status = 'failed';
+            session.resultDesc =
+              payload.data?.gateway_response || 'Paystack charge failed or was declined';
+          }
+        }
+      }
+
+      res.json({ received: true });
+    }
+  );
 
   // Teacher Assignment File Upload (max 5 MB decoded; scoped 8 MB JSON payload)
   app.post(
@@ -274,34 +336,37 @@ async function startServer(): Promise<void> {
 
   app.use(express.json({ limit: '256kb' }));
 
-  // 1. Inspect Safaricom Daraja readiness (never exposes credentials)
-  app.get('/api/mpesa/status', (req: Request, res: Response) => {
-    const cfg = getDarajaConfig();
-    const callbackUrl = resolveCallbackUrl(req, cfg.explicitCallback, cfg.appUrl);
+  // 1. Inspect Paystack readiness (never exposes PAYSTACK_SECRET_KEY)
+  app.get('/api/paystack/status', (req: Request, res: Response) => {
+    const cfg = getPaystackConfig();
+    const callbackUrl = resolvePaystackCallbackUrl(req, cfg.explicitCallback, cfg.appUrl);
+    const webhookUrl = resolvePaystackWebhookUrl(req, cfg.appUrl);
     res.json({
       configured: cfg.configured,
-      environment: cfg.env,
-      shortcode: cfg.shortcode || '174379',
+      environment: cfg.environment,
       monthlyKes: MONTHLY_LICENSE_KES,
-      hasCallbackUrl: Boolean(callbackUrl),
+      channels: PAYSTACK_CHANNELS,
+      hasWebhookUrl: Boolean(webhookUrl),
+      callbackUrl,
+      webhookUrl,
       missingVars: cfg.missingVars,
     });
   });
 
-  // 2. Initiate M-Pesa Lipa Na M-Pesa Online STK Push (KES 30/child/mo)
-  app.post('/api/mpesa/stkpush', async (req: Request, res: Response) => {
+  // 2. Trigger Paystack M-Pesa STK Push directly to user's phone (KES 30/child/mo)
+  app.post('/api/paystack/initialize', async (req: Request, res: Response) => {
     pruneOldSessions();
     const body = (req.body ?? {}) as {
+      email?: unknown;
       phoneNumber?: unknown;
       childIds?: unknown;
-      accountReference?: unknown;
     };
 
-    const normalizedPhone = normalizeKenyaPhone(body.phoneNumber);
+    const normalizedPhone = normalizeKenyaPhoneE164(body.phoneNumber);
     if (!normalizedPhone) {
       res.status(400).json({
         ok: false,
-        error: 'Enter a valid Kenyan M-Pesa phone number (e.g. 0712 345 678 or 254712345678).',
+        error: 'Enter a valid Kenyan M-Pesa phone number (e.g. 0712 345 678 or +254712345678).',
       });
       return;
     }
@@ -326,282 +391,372 @@ async function startServer(): Promise<void> {
       return;
     }
 
-    // Server strictly enforces KES 30 per child per month
+    // Server strictly enforces KES 30 per child per month (3000 subunits in Paystack KES)
     const amountKes = cleanChildIds.length * MONTHLY_LICENSE_KES;
-    const cfg = getDarajaConfig();
+    const amountSubunits = amountKes * 100;
+    const phoneDigits = normalizedPhone.slice(1); // 2547XXXXXXXX
+    const internalEmail = sanitizeEmail(body.email) || `parent.${phoneDigits}@somatime.ke`;
+    const cfg = getPaystackConfig();
     const expiresAt = buildLicenseExpiryIso(30);
+    const reference = `SOMA_${Date.now()}_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 
     if (!cfg.configured) {
-      const token = Math.random().toString(36).slice(2, 6).toUpperCase();
-      const suffix = normalizedPhone.slice(-4);
-      const receiptRef = `MPESA-${suffix}${token}`.slice(0, 24);
+      const demoRef = `PSK-${phoneDigits.slice(-4)}${reference.slice(-4)}`.slice(0, 24);
       res.json({
         ok: true,
-        mode: 'sandbox_demo',
+        mode: 'paystack_test_demo',
         configured: false,
+        environment: 'test',
         amountKes,
         phoneNumber: normalizedPhone,
-        receiptRef,
+        reference: demoRef,
         expiresAt,
         missingVars: cfg.missingVars,
-        message: `Sandbox Demo M-Pesa STK completed (KES ${amountKes}). Add Daraja secrets in Settings -> Secrets to trigger real phone PIN prompts.`,
-      });
-      return;
-    }
-
-    const callbackUrl = resolveCallbackUrl(req, cfg.explicitCallback, cfg.appUrl);
-    if (!callbackUrl) {
-      res.status(400).json({
-        ok: false,
-        error:
-          'Daraja requires an HTTPS callback URL. Set MPESA_CALLBACK_URL or APP_URL (https://...) in Secrets.',
+        message: `Paystack M-Pesa Test Demo confirmed (KES ${amountKes}) for ${normalizedPhone}.`,
       });
       return;
     }
 
     try {
-      const accessToken = await fetchDarajaAccessToken(
-        cfg.baseUrl,
-        cfg.consumerKey,
-        cfg.consumerSecret
-      );
-      const timestamp = buildDarajaTimestamp();
-      const password = Buffer.from(`${cfg.shortcode}${cfg.passkey}${timestamp}`, 'utf8').toString(
-        'base64'
-      );
-
-      const safeRef =
-        typeof body.accountReference === 'string'
-          ? body.accountReference.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 12) || 'SomaTime'
-          : 'SomaTime';
-
-      const stkPayload = {
-        BusinessShortCode: cfg.shortcode,
-        Password: password,
-        Timestamp: timestamp,
-        TransactionType: cfg.transactionType,
-        Amount: amountKes,
-        PartyA: normalizedPhone,
-        PartyB: cfg.shortcode,
-        PhoneNumber: normalizedPhone,
-        CallBackURL: callbackUrl,
-        AccountReference: safeRef,
-        TransactionDesc: `SomaTime ${cleanChildIds.length} child license`,
+      const chargePayload = {
+        email: internalEmail,
+        amount: amountSubunits,
+        currency: 'KES',
+        reference,
+        mobile_money: {
+          phone: normalizedPhone,
+          provider: 'mpesa',
+        },
+        metadata: {
+          childIds: cleanChildIds,
+          parentPhone: normalizedPhone,
+          plan: 'SomaTime Monthly Child Guard (KES 30/child/mo)',
+        },
       };
 
-      const stkResponse = await fetch(`${cfg.baseUrl}/mpesa/stkpush/v1/processrequest`, {
+      const pRes = await fetch('https://api.paystack.co/charge', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${cfg.secretKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(stkPayload),
+        body: JSON.stringify(chargePayload),
       });
 
-      const stkJson = (await stkResponse.json()) as {
-        MerchantRequestID?: string;
-        CheckoutRequestID?: string;
-        ResponseCode?: string;
-        ResponseDescription?: string;
-        CustomerMessage?: string;
-        errorMessage?: string;
+      const pJson = (await pRes.json()) as {
+        status?: boolean;
+        message?: string;
+        data?: {
+          reference?: string;
+          status?: string;
+          display_text?: string;
+          gateway_response?: string;
+        };
       };
 
-      if (!stkResponse.ok || stkJson.ResponseCode !== '0' || !stkJson.CheckoutRequestID) {
+      if (!pRes.ok || !pJson.status || !pJson.data) {
         res.status(400).json({
           ok: false,
-          error:
-            stkJson.errorMessage ||
-            stkJson.ResponseDescription ||
-            'Safaricom Daraja rejected the STK Push request.',
+          error: pJson.message || 'Paystack could not trigger the M-Pesa phone prompt.',
         });
         return;
       }
 
-      checkoutSessions.set(stkJson.CheckoutRequestID, {
-        checkoutRequestId: stkJson.CheckoutRequestID,
-        merchantRequestId: stkJson.MerchantRequestID || '',
+      const activeRef =
+        pJson.data.reference && /^[a-zA-Z0-9_-]{6,80}$/.test(pJson.data.reference)
+          ? pJson.data.reference
+          : reference;
+      const chargeStatus = String(pJson.data.status || '').toLowerCase();
+
+      if (chargeStatus === 'failed') {
+        res.status(400).json({
+          ok: false,
+          error: pJson.data.gateway_response || pJson.message || 'Paystack M-Pesa request failed.',
+        });
+        return;
+      }
+
+      if (chargeStatus === 'success') {
+        const receiptRef = `PSK-${activeRef.slice(-8).toUpperCase()}`.slice(0, 24);
+        paystackSessions.set(activeRef, {
+          reference: activeRef,
+          childIds: cleanChildIds,
+          amountKes,
+          email: internalEmail,
+          phoneNumber: normalizedPhone,
+          status: 'paid',
+          channel: 'mobile_money',
+          receiptRef,
+          resultDesc: pJson.data.gateway_response || 'Payment confirmed by Paystack M-Pesa',
+          createdAtMs: Date.now(),
+        });
+        res.json({
+          ok: true,
+          mode: 'paystack_stk_instant',
+          configured: true,
+          environment: cfg.environment,
+          amountKes,
+          phoneNumber: normalizedPhone,
+          reference: activeRef,
+          receiptRef,
+          expiresAt,
+          message: pJson.data.gateway_response || `KES ${amountKes} confirmed on ${normalizedPhone}.`,
+        });
+        return;
+      }
+
+      const promptMsg =
+        pJson.data.display_text ||
+        `M-Pesa PIN prompt for KES ${amountKes} sent to ${normalizedPhone}. Enter your M-Pesa PIN on your phone.`;
+
+      paystackSessions.set(activeRef, {
+        reference: activeRef,
         childIds: cleanChildIds,
         amountKes,
+        email: internalEmail,
         phoneNumber: normalizedPhone,
         status: 'pending',
-        receiptNumber: null,
-        resultDesc: stkJson.CustomerMessage || 'M-Pesa STK prompt sent to phone',
+        channel: 'mobile_money',
+        receiptRef: null,
+        resultDesc: promptMsg,
         createdAtMs: Date.now(),
       });
 
       res.json({
         ok: true,
-        mode: 'daraja_stk',
+        mode: 'paystack_stk',
         configured: true,
-        environment: cfg.env,
+        environment: cfg.environment,
         amountKes,
         phoneNumber: normalizedPhone,
-        checkoutRequestId: stkJson.CheckoutRequestID,
-        merchantRequestId: stkJson.MerchantRequestID || '',
+        reference: activeRef,
         expiresAt,
-        message:
-          stkJson.CustomerMessage ||
-          `M-Pesa prompt for KES ${amountKes} sent to ${normalizedPhone}. Enter your M-Pesa PIN.`,
+        message: promptMsg,
       });
     } catch (err) {
       res.status(502).json({
         ok: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Unable to reach Safaricom Daraja M-Pesa API right now.',
+        error: err instanceof Error ? err.message : 'Unable to reach Paystack Charge API right now.',
       });
     }
   });
 
-  // 3. Query STK Push transaction status
-  app.get('/api/mpesa/query/:checkoutRequestId', async (req: Request, res: Response) => {
-    const rawId = String(req.params.checkoutRequestId || '').trim();
-    if (!/^[a-zA-Z0-9_-]{6,80}$/.test(rawId)) {
-      res.status(400).json({ ok: false, error: 'Invalid CheckoutRequestID' });
-      return;
-    }
-
-    const existing = checkoutSessions.get(rawId);
+  async function verifyPaystackTransaction(rawRef: string): Promise<{
+    httpStatus: number;
+    ok: boolean;
+    status: 'pending' | 'paid' | 'failed';
+    receiptRef: string | null;
+    amountKes?: number;
+    channel?: string | null;
+    childIds?: string[];
+    expiresAt?: string;
+    message: string;
+    error?: string;
+  }> {
+    const existing = paystackSessions.get(rawRef);
     if (existing && existing.status !== 'pending') {
-      res.json({
+      return {
+        httpStatus: 200,
         ok: true,
         status: existing.status,
-        receiptRef: existing.receiptNumber,
+        receiptRef: existing.receiptRef || `PSK-${rawRef.slice(-8).toUpperCase()}`,
         amountKes: existing.amountKes,
+        channel: existing.channel,
+        childIds: existing.childIds,
         expiresAt: buildLicenseExpiryIso(30),
         message: existing.resultDesc,
-      });
-      return;
+      };
     }
 
-    const cfg = getDarajaConfig();
+    const cfg = getPaystackConfig();
     if (!cfg.configured) {
-      res.status(404).json({ ok: false, error: 'Daraja not configured' });
-      return;
+      return {
+        httpStatus: 404,
+        ok: false,
+        status: 'failed',
+        receiptRef: null,
+        message: 'Paystack secret key is not configured.',
+        error: 'Paystack secret key is not configured.',
+      };
     }
 
     try {
-      const accessToken = await fetchDarajaAccessToken(
-        cfg.baseUrl,
-        cfg.consumerKey,
-        cfg.consumerSecret
-      );
-      const timestamp = buildDarajaTimestamp();
-      const password = Buffer.from(`${cfg.shortcode}${cfg.passkey}${timestamp}`, 'utf8').toString(
-        'base64'
+      const verifyRes = await fetch(
+        `https://api.paystack.co/transaction/verify/${encodeURIComponent(rawRef)}`,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${cfg.secretKey}`,
+            Accept: 'application/json',
+          },
+        }
       );
 
-      const queryRes = await fetch(`${cfg.baseUrl}/mpesa/stkpushquery/v1/query`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          BusinessShortCode: cfg.shortcode,
-          Password: password,
-          Timestamp: timestamp,
-          CheckoutRequestID: rawId,
-        }),
-      });
-
-      const qJson = (await queryRes.json()) as {
-        ResultCode?: string | number;
-        ResultDesc?: string;
-        errorCode?: string;
-        errorMessage?: string;
+      const vJson = (await verifyRes.json()) as {
+        status?: boolean;
+        message?: string;
+        data?: {
+          status?: string;
+          reference?: string;
+          amount?: number;
+          currency?: string;
+          channel?: string;
+          gateway_response?: string;
+          metadata?: {
+            childIds?: unknown;
+          };
+        };
       };
 
-      const resultCode = qJson.ResultCode !== undefined ? String(qJson.ResultCode) : '';
-      if (resultCode === '0') {
-        const receipt =
-          existing?.receiptNumber ||
-          `MPESA-${rawId.replace(/[^a-zA-Z0-9]/g, '').slice(-8).toUpperCase()}`;
+      const txStatus = String(vJson.data?.status || '').toLowerCase();
+      const currency = String(vJson.data?.currency || '').toUpperCase();
+      const paidSubunits = Number(vJson.data?.amount || 0);
+      const metaChildIds = Array.isArray(vJson.data?.metadata?.childIds)
+        ? vJson.data.metadata.childIds.filter(
+            (id): id is string => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(id)
+          )
+        : [];
+      const expectedChildCount = Math.max(
+        1,
+        existing?.childIds.length || metaChildIds.length || 1
+      );
+      const expectedSubunits = existing
+        ? existing.amountKes * 100
+        : expectedChildCount * MONTHLY_LICENSE_KES * 100;
+
+      if (vJson.status && txStatus === 'success') {
+        if (currency !== 'KES' || paidSubunits < expectedSubunits) {
+          if (existing) {
+            existing.status = 'failed';
+            existing.resultDesc = 'Paystack payment currency or amount mismatch.';
+          }
+          return {
+            httpStatus: 200,
+            ok: true,
+            status: 'failed',
+            receiptRef: null,
+            message: 'Paystack transaction currency or amount did not match KES 30/child.',
+          };
+        }
+
+        const receiptRef = `PSK-${rawRef.slice(-8).toUpperCase()}`.slice(0, 24);
+        const channel = typeof vJson.data?.channel === 'string' ? vJson.data.channel : null;
         if (existing) {
           existing.status = 'paid';
-          existing.receiptNumber = receipt;
-          existing.resultDesc = qJson.ResultDesc || 'Payment confirmed by Safaricom M-Pesa';
+          existing.channel = channel;
+          existing.receiptRef = receiptRef;
+          existing.resultDesc = vJson.data?.gateway_response || 'Payment verified by Paystack';
         }
-        res.json({
+        return {
+          httpStatus: 200,
           ok: true,
           status: 'paid',
-          receiptRef: receipt,
-          amountKes: existing?.amountKes || MONTHLY_LICENSE_KES,
+          receiptRef,
+          amountKes: Math.round(paidSubunits / 100),
+          channel,
+          childIds: existing?.childIds || metaChildIds,
           expiresAt: buildLicenseExpiryIso(30),
-          message: existing?.resultDesc || 'Payment confirmed by Safaricom M-Pesa',
-        });
-        return;
+          message: existing?.resultDesc || 'Payment verified by Paystack.',
+        };
       }
 
-      if (resultCode && resultCode !== '4999') {
-        const desc = qJson.ResultDesc || 'M-Pesa transaction was cancelled or failed.';
+      if (txStatus === 'failed' || txStatus === 'reversed') {
+        const desc = vJson.data?.gateway_response || 'Paystack payment failed or was declined.';
         if (existing) {
           existing.status = 'failed';
           existing.resultDesc = desc;
         }
-        res.json({
+        return {
+          httpStatus: 200,
           ok: true,
           status: 'failed',
           receiptRef: null,
           message: desc,
-        });
-        return;
+        };
       }
 
-      res.json({
+      // Note: Paystack reports status='abandoned' immediately after initialize until the customer
+      // completes M-Pesa / Card payment on checkout.paystack.com, so treat it as 'pending'.
+      return {
+        httpStatus: 200,
         ok: true,
         status: 'pending',
         receiptRef: null,
-        message: 'Waiting for parent to enter M-Pesa PIN on phone...',
-      });
+        message: 'Awaiting payment completion in Paystack Checkout (M-Pesa / Card)...',
+      };
     } catch {
-      res.json({
+      return {
+        httpStatus: 200,
         ok: true,
         status: 'pending',
         receiptRef: null,
-        message: 'Waiting for Safaricom M-Pesa confirmation...',
-      });
+        message: 'Checking Paystack payment status...',
+      };
     }
+  }
+
+  // 3. Verify Paystack Transaction status (JSON API)
+  app.get('/api/paystack/verify/:reference', async (req: Request, res: Response) => {
+    const rawRef = String(req.params.reference || '').trim();
+    if (!/^[a-zA-Z0-9_-]{6,80}$/.test(rawRef)) {
+      res.status(400).json({ ok: false, error: 'Invalid Paystack transaction reference.' });
+      return;
+    }
+
+    const result = await verifyPaystackTransaction(rawRef);
+    const { httpStatus, ...payload } = result;
+    res.status(httpStatus).json(payload);
   });
 
-  // 4. Safaricom Daraja Callback Webhook
-  app.post('/api/mpesa/callback', (req: Request, res: Response) => {
-    const callback = (req.body as {
-      Body?: {
-        stkCallback?: {
-          CheckoutRequestID?: string;
-          ResultCode?: number;
-          ResultDesc?: string;
-          CallbackMetadata?: {
-            Item?: Array<{ Name?: string; Value?: unknown }>;
-          };
-        };
-      };
-    })?.Body?.stkCallback;
+  // 4. Backend-built Paystack Browser Callback Handler (used automatically when PAYSTACK_CALLBACK_URL is blank)
+  app.get('/api/paystack/callback', async (req: Request, res: Response) => {
+    const rawRef = String(req.query.reference || req.query.trxref || '').trim();
+    const client = req.query.client === 'android' ? 'android' : 'web';
 
-    if (callback?.CheckoutRequestID) {
-      const session = checkoutSessions.get(callback.CheckoutRequestID);
-      if (session) {
-        if (Number(callback.ResultCode) === 0) {
-          const items = callback.CallbackMetadata?.Item ?? [];
-          const receiptItem = items.find((i) => i.Name === 'MpesaReceiptNumber');
-          const receiptStr =
-            typeof receiptItem?.Value === 'string' && receiptItem.Value.trim()
-              ? receiptItem.Value.trim().slice(0, 24)
-              : `MPESA-${callback.CheckoutRequestID.slice(-8).toUpperCase()}`;
-          session.status = 'paid';
-          session.receiptNumber = receiptStr;
-          session.resultDesc = callback.ResultDesc || 'Confirmed via M-Pesa callback';
-        } else {
-          session.status = 'failed';
-          session.resultDesc = callback.ResultDesc || 'M-Pesa payment failed or cancelled';
-        }
-      }
+    if (!/^[a-zA-Z0-9_-]{6,80}$/.test(rawRef)) {
+      res
+        .status(400)
+        .setHeader('Content-Type', 'text/html; charset=utf-8')
+        .send(
+          '<!doctype html><html><body style="font-family:system-ui;padding:32px;background:#f8fafc;color:#0f172a"><h2>Invalid Paystack reference</h2><p>Return to SomaTime and click Verify Payment Now.</p></body></html>'
+        );
+      return;
     }
 
-    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    const result = await verifyPaystackTransaction(rawRef);
+    const isPaid = result.status === 'paid';
+    const isFailed = result.status === 'failed';
+    const safeRef = escapeHtml(result.receiptRef || rawRef);
+    const safeMsg = escapeHtml(result.message);
+    const safeAmount = escapeHtml(String(result.amountKes ?? MONTHLY_LICENSE_KES));
+    const safeReturnHref = `/?paystack_callback=1&reference=${encodeURIComponent(rawRef)}`;
+    const safeRecheckHref = `/api/paystack/callback?client=${client}&reference=${encodeURIComponent(rawRef)}`;
+
+    const heading = isPaid
+      ? 'Paystack Payment Confirmed'
+      : isFailed
+        ? 'Paystack Payment Not Completed'
+        : 'Waiting for Paystack Confirmation';
+    const badgeColor = isPaid ? '#059669' : isFailed ? '#dc2626' : '#0284c7';
+    const detailLine = isPaid
+      ? `KES ${safeAmount}/mo verified · Receipt <strong>${safeRef}</strong>`
+      : safeMsg;
+    const actionBlock =
+      client === 'android'
+        ? isPaid
+          ? '<p style="margin-top:16px;font-size:14px;color:#334155;">Switch back to the <strong>SomaTime</strong> Android app now — your child license activates automatically on return.</p>'
+          : `<p style="margin-top:16px;font-size:14px;color:#334155;">If you just entered your M-Pesa PIN, wait a few seconds and tap below or switch back to SomaTime and tap Verify Now.</p><a href="${safeRecheckHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#0284c7;color:#fff;font-weight:700;text-decoration:none;">Re-check Payment Status</a>`
+        : isPaid
+          ? `<p style="margin-top:16px;font-size:14px;color:#334155;">Your original SomaTime tab is now unlocked. You can close this tab or continue below.</p><a href="${safeReturnHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#0f766e;color:#fff;font-weight:700;text-decoration:none;">Return to SomaTime Dashboard →</a>`
+          : `<p style="margin-top:16px;font-size:14px;color:#334155;">If you just completed M-Pesa or Card payment, tap below to re-check confirmation.</p><a href="${safeRecheckHref}" style="display:inline-block;margin-top:12px;margin-right:8px;padding:12px 18px;border-radius:12px;background:#0284c7;color:#fff;font-weight:700;text-decoration:none;">Re-check Status</a><a href="${safeReturnHref}" style="display:inline-block;margin-top:12px;padding:12px 18px;border-radius:12px;background:#e2e8f0;color:#0f172a;font-weight:700;text-decoration:none;">Back to Dashboard</a>`;
+
+    res
+      .status(200)
+      .setHeader('Content-Type', 'text/html; charset=utf-8')
+      .setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'")
+      .send(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(heading)} · SomaTime</title></head><body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;font-family:system-ui,-apple-system,sans-serif;padding:20px;color:#0f172a;"><div style="max-width:460px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:28px;box-shadow:0 10px 30px rgba(15,23,42,.06);"><div style="display:inline-block;padding:4px 10px;border-radius:8px;background:${badgeColor};color:#fff;font-size:12px;font-weight:700;">SomaTime · Paystack</div><h1 style="margin:14px 0 8px;font-size:22px;line-height:1.25;">${escapeHtml(heading)}</h1><p style="margin:0;font-size:14px;color:#334155;">${detailLine}</p>${actionBlock}</div></body></html>`
+      );
   });
 
   // 5. Serve uploaded teacher assignment files safely

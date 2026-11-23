@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.School
@@ -52,7 +53,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.somatime.app.data.AssignmentUploadParser
@@ -133,7 +136,9 @@ fun TeacherPortalScreen(
     var rubricFilter by remember { mutableStateOf<CBCRubric?>(null) }
 
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
+    var codeCopied by remember { mutableStateOf(false) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -318,6 +323,29 @@ fun TeacherPortalScreen(
                             fontWeight = FontWeight.SemiBold,
                             color = Color(0xFF0F172A)
                         )
+                        Text(
+                            "Share ${activeTeacher.teacherCode} with parents so they can link this class in Parents -> Linked Class Teachers.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF475569)
+                        )
+
+                        OutlinedButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(activeTeacher.teacherCode))
+                                codeCopied = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                if (codeCopied) {
+                                    "Copied ${activeTeacher.teacherCode} ✓"
+                                } else {
+                                    "Copy Teacher Class Code (${activeTeacher.teacherCode})"
+                                }
+                            )
+                        }
 
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
@@ -357,7 +385,7 @@ fun TeacherPortalScreen(
                             )
                         }
                         Text(
-                            "Register your name, school, grade, and CBC subject areas to receive a Teacher Code (TCH-XXXX) so your strand assignments sync automatically to learners in your school.",
+                            "Register your name, school, grade, and CBC subject areas to receive a unique Teacher Class Code (TCH-XXXXXX). Only parents who verify & link your code receive your assignments.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color(0xFF475569)
                         )
@@ -888,8 +916,18 @@ fun TeacherPortalScreen(
                         }
                     }
 
+                    if (activeTeacher == null) {
+                        Text(
+                            "Sign in or register as a teacher above first to get a Teacher Class Code before publishing assignments.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFB45309),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
                     Button(
                         onClick = {
+                            if (activeTeacher == null) return@Button
                             val isCustomMode = composerMode == "custom"
                             if (isCustomMode && customQuestions.isEmpty() && attachmentName.isEmpty() && customTitle.isBlank()) {
                                 uploadFeedback = "Enter a title, upload a worksheet, or add at least 1 question."
@@ -930,9 +968,9 @@ fun TeacherPortalScreen(
                             pushedNotice = if (isCustomMode) {
                                 "${customTitle.trim().ifEmpty { finalSub }} (${customQuestions.size} Qs" +
                                     (if (attachmentName.isNotEmpty()) " + $attachmentName" else "") +
-                                    ") pushed to Grade $targetGrade at $schoolName"
+                                    ") pushed via ${activeTeacher.teacherCode}"
                             } else {
-                                "${selectedArea.displayName} · $finalStrand ($finalSub) pushed to Grade $targetGrade at $schoolName"
+                                "${selectedArea.displayName} · $finalStrand ($finalSub) pushed via ${activeTeacher.teacherCode}"
                             }
                             if (isCustomMode) {
                                 customTitle = ""
@@ -945,12 +983,13 @@ fun TeacherPortalScreen(
                                 uploadFeedback = ""
                             }
                         },
+                        enabled = activeTeacher != null && !isUploadingFile,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
                     ) {
                         Icon(Icons.Rounded.Send, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (composerMode == "custom") "Publish Custom Assignment" else "Push Assignment to Students")
+                        Text(if (composerMode == "custom") "Publish Custom Assignment" else "Push Assignment to Linked Learners")
                     }
 
                     if (pushedNotice.isNotEmpty()) {

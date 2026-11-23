@@ -31,6 +31,7 @@ import {
   scaleLessonQuestionsForGrade,
 } from '../data/cbcCurriculum';
 import { formatTimeClock } from '../hooks/useSomaTimeStore';
+import { normalizeTeacherCode } from '../lib/firebase';
 import type {
   CBCLesson,
   CBCRubric,
@@ -113,12 +114,20 @@ export function ChildMode({
   const effectiveSelectedArea =
     selectedArea === 'All' || gradeSubjects.includes(selectedArea) ? selectedArea : 'All';
 
-  // Pending Teacher Assignments (Priority) matching this learner's grade
+  // Pending Teacher Assignments (Priority) strictly from Parent-Linked Class Teachers matching this grade
   const priorityAssignments = useMemo(() => {
-    return assignments.filter(
-      (a) => a.grade === learnerGrade && !a.completedByChildIds.includes(child.id)
+    const linkedSet = new Set(
+      (child.linkedTeacherCodes || []).map((c) => normalizeTeacherCode(c)).filter(Boolean)
     );
-  }, [assignments, child.id, learnerGrade]);
+    if (linkedSet.size === 0) return [];
+    return assignments.filter(
+      (a) =>
+        a.grade === learnerGrade &&
+        !a.completedByChildIds.includes(child.id) &&
+        Boolean(a.teacherCode) &&
+        linkedSet.has(normalizeTeacherCode(a.teacherCode!))
+    );
+  }, [assignments, child.id, child.linkedTeacherCodes, learnerGrade]);
 
   const hasPriorityPending = priorityAssignments.length > 0;
 

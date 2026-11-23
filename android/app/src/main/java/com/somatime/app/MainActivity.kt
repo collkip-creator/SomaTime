@@ -477,12 +477,12 @@ private fun SomaTimeRoot(
                             store.resolveApproval(childId, approvalId, approved = false)
                         },
                         onUpdateParentPin = store::updateParentPin,
-                        onActivateChildLicense = { childId, phone ->
-                            store.activateChildLicense(childId, phone)
-                        },
-                        onActivateAllUnpaidLicenses = { phone ->
-                            store.activateAllUnpaidLicenses(phone)
-                        }
+                        onFetchPaystackStatus = store::fetchPaystackStatusAsync,
+                        onInitializePaystack = store::initializePaystackCheckoutAsync,
+                        onVerifyPaystack = store::verifyPaystackPaymentAsync,
+                        onVerifyTeacherCode = store::verifyTeacherClassCodeAsync,
+                        onLinkTeacherToChild = store::linkTeacherToChild,
+                        onUnlinkTeacherFromChild = store::unlinkTeacherFromChild
                     )
 
                     RoleView.CHILD -> ChildModeScreen(
@@ -508,7 +508,8 @@ private fun SomaTimeRoot(
                                 pin = uiState.parentPin.ifBlank { "1234" },
                                 subjects = subjects,
                                 grade = grade,
-                                classStream = "Grade $grade East - $school"
+                                classStream = "Grade $grade East - $school",
+                                autoLinkOwnedChildren = true
                             )
                         },
                         onLogoutTeacher = store::logoutTeacher,

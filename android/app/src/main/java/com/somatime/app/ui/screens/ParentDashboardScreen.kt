@@ -46,10 +46,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,17 +66,24 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.somatime.app.data.CbcCurriculumRepository
+import com.somatime.app.data.PaystackGatewayStatus
+import com.somatime.app.data.PaystackInitResult
+import com.somatime.app.data.PaystackVerifyResult
 import com.somatime.app.data.SetupWizardTab
 import com.somatime.app.data.SomaTimeStore
 import com.somatime.app.data.SomaTimeUiState
+import com.somatime.app.data.TeacherVerifyResult
 import com.somatime.app.guard.ScreenTimeGuardService
 import com.somatime.app.guard.UsageAccessHelper
 import com.somatime.app.model.DeviceMode
 import com.somatime.app.model.LearningArea
+import com.somatime.app.model.LinkedTeacherSummary
 import com.somatime.app.model.PendingApproval
 import com.somatime.app.ui.theme.SomaAmber
 import com.somatime.app.ui.theme.SomaEmerald
 import com.somatime.app.ui.theme.SomaTeal
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -97,11 +106,16 @@ fun ParentDashboardScreen(
     onRequestApprovalPin: (PendingApproval) -> Unit,
     onDeclineApproval: (String, String) -> Unit,
     onUpdateParentPin: (String) -> Boolean,
-    onActivateChildLicense: (String, String) -> Unit,
-    onActivateAllUnpaidLicenses: (String) -> Unit
+    onFetchPaystackStatus: suspend () -> PaystackGatewayStatus?,
+    onInitializePaystack: suspend (String, List<String>) -> PaystackInitResult,
+    onVerifyPaystack: suspend (String, List<String>, String) -> PaystackVerifyResult,
+    onVerifyTeacherCode: suspend (String) -> TeacherVerifyResult,
+    onLinkTeacherToChild: (String, LinkedTeacherSummary) -> Unit,
+    onUnlinkTeacherFromChild: (String, String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
     val child = uiState.selectedChild
     if (child == null) {
         LazyColumn(
@@ -172,8 +186,53 @@ fun ParentDashboardScreen(
     var pinUpdateMsg by remember { mutableStateOf("") }
     var pinUpdateIsError by remember { mutableStateOf(false) }
 
-    var mpesaPhone by remember(uiState.parentContact) { mutableStateOf(uiState.parentContact) }
+    var payerPhone by remember(uiState.parentContact) {
+        mutableStateOf(if ("@" !in uiState.parentContact) uiState.parentContact.trim() else "")
+    }
+    var paystackStatus by remember { mutableStateOf<PaystackGatewayStatus?>(null) }
+    var isPayingPaystack by remember { mutableStateOf(false) }
+    var isVerifyingPaystack by remember { mutableStateOf(false) }
+    var pendingPaystackRef by remember { mutableStateOf<String?>(null) }
+    var pendingPaystackChildIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var pendingPaystackAmountKes by remember { mutableIntStateOf(CbcCurriculumRepository.MONTHLY_LICENSE_KES) }
     var licenseFeedback by remember { mutableStateOf("") }
+    var licenseFeedbackIsError by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        paystackStatus = onFetchPaystackStatus()
+    }
+
+    LaunchedEffect(pendingPaystackRef) {
+        val activeRef = pendingPaystackRef ?: return@LaunchedEffect
+        repeat(60) {
+            delay(3000L)
+            if (pendingPaystackRef != activeRef) return@LaunchedEffect
+            isVerifyingPaystack = true
+            val res = onVerifyPaystack(
+                activeRef,
+                pendingPaystackChildIds,
+                payerPhone.trim()
+            )
+            isVerifyingPaystack = false
+            when (res.status) {
+                "paid" -> {
+                    pendingPaystackRef = null
+                    pendingPaystackChildIds = emptyList()
+                    licenseFeedbackIsError = false
+                    licenseFeedback =
+                        "Paystack M-Pesa confirmed KES ${res.amountKes}/mo · Ref ${res.receiptRef ?: activeRef}. Pairing & Child Lock unlocked ✓"
+                    return@LaunchedEffect
+                }
+                "failed" -> {
+                    pendingPaystackRef = null
+                    pendingPaystackChildIds = emptyList()
+                    licenseFeedbackIsError = true
+                    licenseFeedback = res.message.ifBlank { "Paystack M-Pesa payment was cancelled or failed." }
+                    return@LaunchedEffect
+                }
+            }
+        }
+    }
 
     var hasUsageStats by remember { mutableStateOf(UsageAccessHelper.hasUsageStatsPermission(context)) }
     var hasOverlay by remember { mutableStateOf(UsageAccessHelper.canDrawOverlays(context)) }
@@ -358,17 +417,18 @@ fun ParentDashboardScreen(
                     HorizontalDivider()
 
                     Text(
-                        "Payment Method: M-Pesa Only · Paybill 174379 (Safaricom Daraja STK)",
+                        "Payment Method: Paystack M-Pesa Phone Prompt (KES $perChildKes/child/mo)",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
-                        color = SomaEmerald
+                        color = SomaTeal
                     )
 
                     OutlinedTextField(
-                        value = mpesaPhone,
+                        value = payerPhone,
                         onValueChange = {
-                            mpesaPhone = it
+                            payerPhone = it
                             licenseFeedback = ""
+                            licenseFeedbackIsError = false
                         },
                         label = { Text("Safaricom M-Pesa Phone Number (e.g. 0712 345 678)") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
@@ -378,25 +438,49 @@ fun ParentDashboardScreen(
 
                     Button(
                         onClick = {
-                            val digits = mpesaPhone.filter(Char::isDigit)
-                            if (digits.length < 9) {
-                                licenseFeedback = "Enter a valid Safaricom M-Pesa phone number."
+                            val cleanPhone = payerPhone.trim()
+                            if (cleanPhone.filter(Char::isDigit).length < 9) {
+                                licenseFeedbackIsError = true
+                                licenseFeedback = "Enter a valid Kenyan M-Pesa phone number."
                                 return@Button
                             }
-                            onActivateChildLicense(child.id, mpesaPhone)
-                            licenseFeedback = "M-Pesa license activated for ${child.name} (KES $perChildKes/mo). Pairing & Child Lock unlocked ✓"
+                            if (isPayingPaystack) return@Button
+                            isPayingPaystack = true
+                            licenseFeedback = ""
+                            licenseFeedbackIsError = false
+                            scope.launch {
+                                val res = onInitializePaystack(cleanPhone, listOf(child.id))
+                                isPayingPaystack = false
+                                if (!res.ok) {
+                                    licenseFeedbackIsError = true
+                                    licenseFeedback = res.error.ifBlank { "Could not send Paystack M-Pesa phone prompt." }
+                                } else if (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant") {
+                                    licenseFeedbackIsError = false
+                                    licenseFeedback =
+                                        "Paystack M-Pesa activated for ${child.name} (KES $perChildKes/mo · Ref ${res.reference}) ✓"
+                                } else {
+                                    pendingPaystackRef = res.reference
+                                    pendingPaystackChildIds = listOf(child.id)
+                                    pendingPaystackAmountKes = res.amountKes
+                                    licenseFeedbackIsError = false
+                                    licenseFeedback = res.message.ifBlank {
+                                        "M-Pesa PIN prompt sent to $cleanPhone. Enter your M-Pesa PIN on your phone."
+                                    }
+                                }
+                            }
                         },
+                        enabled = !isPayingPaystack,
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (child.licenseActive) SomaTeal else Color(0xFF059669)
+                            containerColor = if (child.licenseActive) SomaTeal else Color(0xFF0F766E)
                         ),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
-                            if (child.licenseActive) {
-                                "Renew ${child.name.split(" ").first()}'s License via M-Pesa (+30 Days · KES $perChildKes)"
-                            } else {
-                                "Pay KES $perChildKes/mo via M-Pesa · ${child.name.split(" ").first()}"
+                            when {
+                                isPayingPaystack -> "Sending M-Pesa Prompt..."
+                                child.licenseActive -> "Renew ${child.name.split(" ").first()}'s License via Paystack (+30 Days · KES $perChildKes)"
+                                else -> "Pay KES $perChildKes/mo via Paystack · ${child.name.split(" ").first()}"
                             }
                         )
                     }
@@ -404,25 +488,139 @@ fun ParentDashboardScreen(
                     if (unpaidChildren.size > 1) {
                         OutlinedButton(
                             onClick = {
-                                val digits = mpesaPhone.filter(Char::isDigit)
-                                if (digits.length < 9) {
-                                    licenseFeedback = "Enter your Safaricom M-Pesa number first."
+                                val cleanPhone = payerPhone.trim()
+                                if (cleanPhone.filter(Char::isDigit).length < 9) {
+                                    licenseFeedbackIsError = true
+                                    licenseFeedback = "Enter a valid Kenyan M-Pesa phone number."
                                     return@OutlinedButton
                                 }
-                                onActivateAllUnpaidLicenses(mpesaPhone)
-                                licenseFeedback = "All ${unpaidChildren.size} unpaid child licenses activated via M-Pesa (KES $unpaidTotalKes/mo) ✓"
+                                if (isPayingPaystack) return@OutlinedButton
+                                isPayingPaystack = true
+                                licenseFeedback = ""
+                                licenseFeedbackIsError = false
+                                val targetIds = unpaidChildren.map { it.id }
+                                scope.launch {
+                                    val res = onInitializePaystack(cleanPhone, targetIds)
+                                    isPayingPaystack = false
+                                    if (!res.ok) {
+                                        licenseFeedbackIsError = true
+                                        licenseFeedback = res.error.ifBlank { "Could not send Paystack M-Pesa phone prompt." }
+                                    } else if (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant") {
+                                        licenseFeedbackIsError = false
+                                        licenseFeedback =
+                                            "All ${unpaidChildren.size} unpaid child licenses activated via Paystack (KES $unpaidTotalKes/mo · Ref ${res.reference}) ✓"
+                                    } else {
+                                        pendingPaystackRef = res.reference
+                                        pendingPaystackChildIds = targetIds
+                                        pendingPaystackAmountKes = res.amountKes
+                                        licenseFeedbackIsError = false
+                                        licenseFeedback = res.message.ifBlank {
+                                            "M-Pesa PIN prompt sent to $cleanPhone. Enter your M-Pesa PIN on your phone."
+                                        }
+                                    }
+                                }
                             },
+                            enabled = !isPayingPaystack,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Pay All Unpaid via M-Pesa (${unpaidChildren.size} × KES $perChildKes = KES $unpaidTotalKes/mo)")
+                            Text("Pay All Unpaid via Paystack (${unpaidChildren.size} × KES $perChildKes = KES $unpaidTotalKes/mo)")
                         }
                     }
+
+                    val activePendingRef = pendingPaystackRef
+                    if (!activePendingRef.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFFF0F9FF),
+                            border = BorderStroke(1.dp, Color(0xFF7DD3FC))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "M-Pesa Prompt Sent · KES $pendingPaystackAmountKes ($activePendingRef)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0C4A6E)
+                                )
+                                Text(
+                                    "Enter your M-Pesa PIN on your phone. Verification runs automatically every 3 seconds.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF0369A1)
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            if (isVerifyingPaystack) return@Button
+                                            isVerifyingPaystack = true
+                                            scope.launch {
+                                                val res = onVerifyPaystack(
+                                                    activePendingRef,
+                                                    pendingPaystackChildIds,
+                                                    payerPhone.trim()
+                                                )
+                                                isVerifyingPaystack = false
+                                                when (res.status) {
+                                                    "paid" -> {
+                                                        pendingPaystackRef = null
+                                                        pendingPaystackChildIds = emptyList()
+                                                        licenseFeedbackIsError = false
+                                                        licenseFeedback =
+                                                            "Paystack confirmed KES ${res.amountKes}/mo · Ref ${res.receiptRef ?: activePendingRef} ✓"
+                                                    }
+                                                    "failed" -> {
+                                                        pendingPaystackRef = null
+                                                        pendingPaystackChildIds = emptyList()
+                                                        licenseFeedbackIsError = true
+                                                        licenseFeedback = res.message.ifBlank { "Payment failed or cancelled." }
+                                                    }
+                                                    else -> {
+                                                        licenseFeedbackIsError = false
+                                                        licenseFeedback = res.message.ifBlank { "Waiting for M-Pesa PIN confirmation..." }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isVerifyingPaystack,
+                                        modifier = Modifier.weight(2f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0369A1))
+                                    ) {
+                                        Text(if (isVerifyingPaystack) "Checking..." else "Verify Now")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            pendingPaystackRef = null
+                                            pendingPaystackChildIds = emptyList()
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    val statusText = when {
+                        paystackStatus?.configured == true && paystackStatus?.environment == "live" ->
+                            "Paystack Gateway: Live Mode Active (M-Pesa + Card + Bank)"
+                        paystackStatus?.configured == true ->
+                            "Paystack Gateway: Test Mode Active (M-Pesa + Card + Bank)"
+                        else ->
+                            "Paystack Gateway: Local Test Simulation (Set PAYSTACK_SECRET_KEY on server for real Checkout)"
+                    }
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF475569)
+                    )
 
                     if (licenseFeedback.isNotEmpty()) {
                         Text(
                             text = licenseFeedback,
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (child.licenseActive) Color(0xFF065F46) else Color(0xFFB91C1C),
+                            color = if (!licenseFeedbackIsError) Color(0xFF065F46) else Color(0xFFB91C1C),
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -794,6 +992,195 @@ fun ParentDashboardScreen(
                                             "Link Teacher Profile on This Phone →"
                                         }
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Linked Class Teachers (Parent Opt-In Gate)
+        item {
+            var teacherCodeInput by remember(child.id) { mutableStateOf("") }
+            var verifyingTeacher by remember(child.id) { mutableStateOf(false) }
+            var verifiedTeacher by remember(child.id) { mutableStateOf<LinkedTeacherSummary?>(null) }
+            var verifyFeedback by remember(child.id) { mutableStateOf("") }
+            var verifyError by remember(child.id) { mutableStateOf(false) }
+
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Linked Class Teachers · ${child.name}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Only teachers whose exact Teacher Class Code you verify & link below can push priority assignments to ${child.name}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF475569)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = teacherCodeInput,
+                            onValueChange = {
+                                teacherCodeInput = it.uppercase()
+                                verifyFeedback = ""
+                                verifiedTeacher = null
+                            },
+                            label = { Text("Teacher Class Code (e.g. TCH-7K4M9Q)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = {
+                                if (verifyingTeacher || teacherCodeInput.isBlank()) return@Button
+                                verifyingTeacher = true
+                                verifyFeedback = ""
+                                scope.launch {
+                                    val res = onVerifyTeacherCode(teacherCodeInput)
+                                    verifyingTeacher = false
+                                    verifiedTeacher = res.teacher
+                                    verifyFeedback = res.message
+                                    verifyError = !res.ok
+                                }
+                            },
+                            enabled = !verifyingTeacher && teacherCodeInput.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
+                        ) {
+                            Text(if (verifyingTeacher) "Checking..." else "Verify")
+                        }
+                    }
+
+                    if (verifyFeedback.isNotEmpty() && verifiedTeacher == null) {
+                        Text(
+                            text = verifyFeedback,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (verifyError) Color(0xFFDC2626) else SomaEmerald
+                        )
+                    }
+
+                    verifiedTeacher?.let { preview ->
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFFF0FDFA),
+                            border = BorderStroke(1.dp, SomaTeal)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "${preview.fullName} · ${preview.teacherCode}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SomaTeal
+                                )
+                                Text(
+                                    "${preview.school} · Grade ${preview.grade} (${preview.classStream})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF334155)
+                                )
+                                if (preview.tscNumber.isNotEmpty()) {
+                                    Text(
+                                        "TSC / Staff No: ${preview.tscNumber}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF475569)
+                                    )
+                                }
+                                Text(
+                                    "Subjects: ${preview.subjects.joinToString(", ") { it.displayName }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF0F172A)
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.padding(top = 6.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            onLinkTeacherToChild(child.id, preview)
+                                            teacherCodeInput = ""
+                                            verifiedTeacher = null
+                                            verifyFeedback = "Linked ${preview.fullName} (${preview.teacherCode}) to ${child.name}."
+                                            verifyError = false
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SomaEmerald),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Confirm & Link Class")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            verifiedTeacher = null
+                                            verifyFeedback = ""
+                                        }
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (child.linkedTeacherCodes.isEmpty()) {
+                        Text(
+                            "No class teachers linked yet. Ask your child's teacher for their TCH-XXXXXX class code.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF64748B)
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            child.linkedTeacherCodes.forEach { linkedCode ->
+                                val meta = child.linkedTeachers.firstOrNull { it.teacherCode == linkedCode }
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = Color(0xFFF8FAFC),
+                                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = if (meta != null) "${meta.fullName} · $linkedCode" else linkedCode,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = if (meta != null) {
+                                                    "${meta.school} · Grade ${meta.grade} · ${meta.subjects.joinToString(", ") { it.displayName }}"
+                                                } else {
+                                                    "Verified Class Code · Receiving assignments"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color(0xFF475569)
+                                            )
+                                        }
+                                        TextButton(
+                                            onClick = { onUnlinkTeacherFromChild(child.id, linkedCode) }
+                                        ) {
+                                            Text("Unlink", color = Color(0xFFDC2626))
+                                        }
+                                    }
                                 }
                             }
                         }
