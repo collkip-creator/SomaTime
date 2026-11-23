@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { GraduationCap, Link2, ShieldCheck, Smartphone, Sparkles } from 'lucide-react';
+import { AndroidPaystackBridge } from './components/AndroidPaystackBridge';
 import { ChildMode } from './components/ChildMode';
 import { ParentDashboard } from './components/ParentDashboard';
 import { PinModal } from './components/PinModal';
@@ -16,6 +17,18 @@ type PinIntent =
   | null;
 
 export default function App() {
+  const isAndroidPaystackBridge =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('android_paystack') === '1';
+
+  if (isAndroidPaystackBridge) {
+    return <AndroidPaystackBridge />;
+  }
+
+  return <SomaTimeMainApp />;
+}
+
+function SomaTimeMainApp() {
   const store = useSomaTimeStore();
   const [pinIntent, setPinIntent] = useState<PinIntent>(null);
   const [setupOpen, setSetupOpen] = useState(false);

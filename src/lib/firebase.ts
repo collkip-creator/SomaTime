@@ -248,6 +248,30 @@ export async function publishPairingToCloud(
   }
 }
 
+export async function activatePairingLicenseInCloud(
+  rawCode: string,
+  receiptRef: string,
+  expiresAt: string
+): Promise<boolean> {
+  const code = normalizePairingCode(rawCode);
+  if (!isValidPairingCodeFormat(code)) return false;
+
+  const docRef = doc(db, 'pairings', code);
+  try {
+    const snap = await getDocFromServer(docRef);
+    if (!snap.exists()) return false;
+    await updateDoc(docRef, {
+      licenseActive: true,
+      licenseExpiresAt: expiresAt.slice(0, 64),
+      licensePaymentRef: receiptRef.slice(0, 64),
+      updatedAt: new Date().toISOString().slice(0, 64),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchAndPairFromCloud(
   rawCode: string
 ): Promise<CloudPairingDoc | null> {

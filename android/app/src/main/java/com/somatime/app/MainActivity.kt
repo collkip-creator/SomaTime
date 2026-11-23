@@ -239,6 +239,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingIntent(intent: Intent?, store: SomaTimeStore) {
+        val uri = intent?.data
+        if (uri != null && uri.scheme == "somatime" && uri.host == "paystack-return") {
+            store.handleAndroidPaystackReturn(
+                status = uri.getQueryParameter("status").orEmpty(),
+                reference = uri.getQueryParameter("reference").orEmpty(),
+                receiptRef = uri.getQueryParameter("receiptRef").orEmpty(),
+                childIdsCsv = uri.getQueryParameter("childIds").orEmpty(),
+                phone = uri.getQueryParameter("phone").orEmpty()
+            )
+            return
+        }
         val interceptedPkg = intent?.getStringExtra(ScreenTimeGuardService.EXTRA_INTERCEPTED_APP)
         if (!interceptedPkg.isNullOrBlank()) {
             store.updateForegroundApp(interceptedPkg)
@@ -480,6 +491,8 @@ private fun SomaTimeRoot(
                         onFetchPaystackStatus = store::fetchPaystackStatusAsync,
                         onInitializePaystack = store::initializePaystackCheckoutAsync,
                         onVerifyPaystack = store::verifyPaystackPaymentAsync,
+                        onUpdateServerBaseUrl = store::updateServerBaseUrl,
+                        onClearPaystackReturnNotice = store::clearPaystackReturnNotice,
                         onVerifyTeacherCode = store::verifyTeacherClassCodeAsync,
                         onLinkTeacherToChild = store::linkTeacherToChild,
                         onUnlinkTeacherFromChild = store::unlinkTeacherFromChild

@@ -99,6 +99,8 @@ data class SomaTimeUiState(
     val guardServiceRunning: Boolean = false,
     val cloudSyncOk: Boolean = true,
     val cloudSyncMessage: String = "Fresh start ready · Register to sync",
+    val serverBaseUrl: String = AssignmentUploadParser.DEFAULT_SERVER_URL,
+    val paystackReturnNotice: String = "",
     val lastDetectedForegroundApp: String? = null,
     val lastInterruptedAppPackage: String? = null,
     val displayedKeysByChild: Map<String, List<String>> = emptyMap(),
@@ -205,6 +207,11 @@ class SomaTimeStore private constructor(context: Context) {
             appContext.getSharedPreferences(LEGACY_PREFS_V2, Context.MODE_PRIVATE).edit().clear().apply()
         }
 
+        val savedServerUrl = prefs.getString("server_base_url", null)
+        if (!savedServerUrl.isNullOrBlank()) {
+            AssignmentUploadParser.setServerBaseUrl(savedServerUrl)
+        }
+
         val demoSeeded = prefs.getBoolean("demo_seeded", false)
         val baseChildren = if (demoSeeded) CbcCurriculumRepository.initialChildren() else emptyList()
         val baseAssignments = if (demoSeeded) CbcCurriculumRepository.initialAssignments() else emptyList()
@@ -212,6 +219,7 @@ class SomaTimeStore private constructor(context: Context) {
 
         val base = SomaTimeUiState(
             demoSeeded = demoSeeded,
+            serverBaseUrl = AssignmentUploadParser.getServerBaseUrl(),
             selectedChildId = baseChildren.firstOrNull()?.id ?: "",
             parentName = if (demoSeeded) "Grace Wanjiku" else "",
             parentContact = if (demoSeeded) "0712 345 678" else "",
@@ -745,13 +753,84 @@ class SomaTimeStore private constructor(context: Context) {
         return updatedTargets.size
     }
 
+    fun updateServerBaseUrl(rawUrl: String): Boolean {
+        val normalized = AssignmentUploadParser.normalizeServerBaseUrl(rawUrl) ?: return false
+        AssignmentUploadParser.setServerBaseUrl(normalized)
+        prefs.edit().putString("server_base_url", normalized).apply()
+        _state.update { it.copy(serverBaseUrl = normalized) }
+        return true
+    }
+
+    fun clearPaystackReturnNotice() {
+        _state.update { it.copy(paystackReturnNotice = "") }
+    }
+
+    fun handleAndroidPaystackReturn(
+        status: String,
+        reference: String,
+        receiptRef: String,
+        childIdsCsv: String,
+        phone: String
+    ) {
+        if (status.lowercase(Locale.US) != "paid") return
+        val targetIds = childIdsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val finalRef = receiptRef.ifBlank { reference }.take(24)
+        val expiresAt = CbcCurriculumRepository.buildLicenseExpiryIso(30)
+
+        var activatedCount = 0
+        val updatedTargets = mutableListOf<ChildProfile>()
+        _state.update { current ->
+            val matchAllUnpaid = targetIds.isEmpty()
+            val nextChildren = current.children.map { c ->
+                val shouldActivate = if (matchAllUnpaid) !c.licenseActive else c.id in targetIds
+                if (shouldActivate) {
+                    activatedCount += 1
+                    c.copy(
+                        licenseActive = true,
+                        licensePlanLabel = CbcCurriculumRepository.MONTHLY_LICENSE_PLAN_LABEL,
+                        licenseExpiresAt = expiresAt,
+                        licensePaymentRef = finalRef.ifBlank { "PSK-MPESA" }
+                    ).also { updatedTargets.add(it) }
+                } else {
+                    c
+                }
+            }
+            current.copy(
+                roleView = RoleView.PARENT,
+                showSetupWizard = false,
+                parentContact = phone.ifBlank { current.parentContact },
+                paystackReturnNotice = if (activatedCount > 0) {
+                    "Paystack M-Pesa confirmed (${finalRef.ifBlank { "Paid" }}) · License unlocked ✓"
+                } else {
+                    current.paystackReturnNotice
+                },
+                children = nextChildren
+            ).also(::persistState)
+        }
+
+        val pin = _state.value.parentPin
+        if (updatedTargets.isNotEmpty()) {
+            scope.launch {
+                updatedTargets.forEach { child ->
+                    FirestoreSyncClient.publishPairingSession(child, pin)
+                }
+            }
+        }
+    }
+
     suspend fun fetchPaystackStatusAsync(): PaystackGatewayStatus? = PaystackClient.fetchStatus()
 
     suspend fun initializePaystackCheckoutAsync(
         phone: String,
         childIds: List<String>
     ): PaystackInitResult {
-        val res = PaystackClient.initializeCheckout(phone, childIds)
+        val targets = _state.value.children.filter { it.id in childIds }
+        val res = PaystackClient.initializeCheckout(
+            phoneNumber = phone,
+            childIds = childIds,
+            pairingCodes = targets.map { it.pairingCode },
+            childNames = targets.map { it.name }
+        )
         if (res.ok && (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant")) {
             if (childIds.size == 1) {
                 activateChildLicense(childIds.first(), phone, res.reference)
@@ -1112,6 +1191,9 @@ class SomaTimeStore private constructor(context: Context) {
                                 usedScreenTodayMins = cloud.usedScreenTodayMins,
                                 learnedMinutesToday = cloud.learnedMinutesToday,
                                 isLocked = cloud.isLocked,
+                                licenseActive = c.licenseActive || cloud.licenseActive,
+                                licenseExpiresAt = c.licenseExpiresAt ?: cloud.licenseExpiresAt.ifEmpty { null },
+                                licensePaymentRef = c.licensePaymentRef ?: cloud.licensePaymentRef.ifEmpty { null },
                                 completedLessonIds = if (cloud.completedLessonIds.isNotEmpty()) {
                                     cloud.completedLessonIds
                                 } else {

@@ -15,7 +15,8 @@ data class PaystackGatewayStatus(
     val configured: Boolean,
     val environment: String,
     val monthlyKes: Int,
-    val webhookUrl: String?
+    val webhookUrl: String?,
+    val requiresBrowserAuth: Boolean = false
 )
 
 data class PaystackInitResult(
@@ -26,7 +27,9 @@ data class PaystackInitResult(
     val amountKes: Int = CbcCurriculumRepository.MONTHLY_LICENSE_KES,
     val expiresAt: String = "",
     val message: String = "",
-    val error: String = ""
+    val error: String = "",
+    val requiresBrowserAuth: Boolean = false,
+    val browserCheckoutUrl: String = ""
 )
 
 data class PaystackVerifyResult(
@@ -37,41 +40,91 @@ data class PaystackVerifyResult(
     val channel: String? = null,
     val childIds: List<String> = emptyList(),
     val message: String = "",
-    val error: String = ""
+    val error: String = "",
+    val requiresBrowserAuth: Boolean = false
 )
 
 object PaystackClient {
     private val SAFE_REF_REGEX = Regex("^[a-zA-Z0-9_-]{6,80}$")
 
+    private fun isHtmlOrAuthRedirect(
+        httpCode: Int,
+        contentType: String?,
+        body: String,
+        location: String?
+    ): Boolean {
+        val loc = location.orEmpty().lowercase()
+        val ct = contentType.orEmpty().lowercase()
+        val trimmed = body.trimStart()
+        if (httpCode in 300..399) return true
+        if (ct.contains("text/html") || trimmed.startsWith("<")) return true
+        if ("__cookie_check" in loc || "applet-auth-bridge" in loc || "accounts.google.com" in loc) return true
+        return false
+    }
+
+    private fun parseJsonObjectSafely(raw: String): JSONObject? {
+        val trimmed = raw.trimStart()
+        if (!trimmed.startsWith("{")) return null
+        return runCatching { JSONObject(trimmed) }.getOrNull()
+    }
+
+    fun buildAndroidBrowserCheckoutUrl(
+        phoneNumber: String,
+        childIds: List<String>,
+        pairingCodes: List<String> = emptyList(),
+        childNames: List<String> = emptyList()
+    ): String {
+        val base = AssignmentUploadParser.getServerBaseUrl()
+        val encPhone = URLEncoder.encode(phoneNumber.trim(), "UTF-8")
+        val encChildIds = URLEncoder.encode(childIds.joinToString(","), "UTF-8")
+        val encCodes = URLEncoder.encode(pairingCodes.joinToString(","), "UTF-8")
+        val encNames = URLEncoder.encode(childNames.joinToString(", "), "UTF-8")
+        return "$base/?android_paystack=1&phone=$encPhone&childIds=$encChildIds&pairingCodes=$encCodes&childNames=$encNames"
+    }
+
     suspend fun fetchStatus(): PaystackGatewayStatus? = withContext(Dispatchers.IO) {
         runCatching {
-            val conn = (URL("${AssignmentUploadParser.UPLOAD_BASE_URL}/api/paystack/status")
+            val conn = (URL("${AssignmentUploadParser.getServerBaseUrl()}/api/paystack/status")
                 .openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
+                instanceFollowRedirects = false
                 connectTimeout = 8000
                 readTimeout = 8000
                 setRequestProperty("Accept", "application/json")
             }
             val code = conn.responseCode
-            if (code !in 200..299) {
-                conn.disconnect()
-                return@runCatching null
-            }
-            val text = BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
+            val contentType = conn.contentType
+            val location = conn.getHeaderField("Location")
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.let { BufferedReader(InputStreamReader(it)).use { r -> r.readText() } }.orEmpty()
             conn.disconnect()
-            val json = JSONObject(text)
+
+            if (isHtmlOrAuthRedirect(code, contentType, text, location)) {
+                return@runCatching PaystackGatewayStatus(
+                    configured = true,
+                    environment = "browser_auth",
+                    monthlyKes = CbcCurriculumRepository.MONTHLY_LICENSE_KES,
+                    webhookUrl = null,
+                    requiresBrowserAuth = true
+                )
+            }
+            if (code !in 200..299) return@runCatching null
+            val json = parseJsonObjectSafely(text) ?: return@runCatching null
             PaystackGatewayStatus(
                 configured = json.optBoolean("configured", false),
                 environment = json.optString("environment", "test"),
                 monthlyKes = json.optInt("monthlyKes", CbcCurriculumRepository.MONTHLY_LICENSE_KES),
-                webhookUrl = json.optString("webhookUrl", "").takeIf { it.startsWith("https://") }
+                webhookUrl = json.optString("webhookUrl", "").takeIf { it.startsWith("https://") },
+                requiresBrowserAuth = false
             )
         }.getOrNull()
     }
 
     suspend fun initializeCheckout(
         phoneNumber: String,
-        childIds: List<String>
+        childIds: List<String>,
+        pairingCodes: List<String> = emptyList(),
+        childNames: List<String> = emptyList()
     ): PaystackInitResult = withContext(Dispatchers.IO) {
         val digits = phoneNumber.filter(Char::isDigit)
         if (digits.length < 9) {
@@ -88,9 +141,11 @@ object PaystackClient {
         }
 
         try {
-            val url = URL("${AssignmentUploadParser.UPLOAD_BASE_URL}/api/paystack/initialize")
+            val base = AssignmentUploadParser.getServerBaseUrl()
+            val url = URL("$base/api/paystack/initialize")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
+                instanceFollowRedirects = false
                 connectTimeout = 15000
                 readTimeout = 15000
                 doOutput = true
@@ -110,9 +165,27 @@ object PaystackClient {
             }
 
             val code = conn.responseCode
+            val contentType = conn.contentType
+            val location = conn.getHeaderField("Location")
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val bodyText = stream?.let { BufferedReader(InputStreamReader(it)).use { r -> r.readText() } }.orEmpty()
             conn.disconnect()
+
+            if (isHtmlOrAuthRedirect(code, contentType, bodyText, location)) {
+                val browserUrl = buildAndroidBrowserCheckoutUrl(
+                    phoneNumber = phoneNumber,
+                    childIds = childIds,
+                    pairingCodes = pairingCodes,
+                    childNames = childNames
+                )
+                return@withContext PaystackInitResult(
+                    ok = false,
+                    requiresBrowserAuth = true,
+                    browserCheckoutUrl = browserUrl,
+                    amountKes = childIds.size * CbcCurriculumRepository.MONTHLY_LICENSE_KES,
+                    error = "The AI Studio preview server requires browser authentication before sending the M-Pesa prompt. Continue in your browser or set a public Server URL."
+                )
+            }
 
             if (bodyText.isBlank()) {
                 return@withContext PaystackInitResult(
@@ -121,7 +194,12 @@ object PaystackClient {
                 )
             }
 
-            val json = JSONObject(bodyText)
+            val json = parseJsonObjectSafely(bodyText)
+                ?: return@withContext PaystackInitResult(
+                    ok = false,
+                    error = "Unexpected non-JSON response from Paystack backend (HTTP $code)."
+                )
+
             if (code !in 200..299 || !json.optBoolean("ok", false)) {
                 return@withContext PaystackInitResult(
                     ok = false,
@@ -161,18 +239,30 @@ object PaystackClient {
 
         try {
             val encodedRef = URLEncoder.encode(cleanRef, "UTF-8")
-            val conn = (URL("${AssignmentUploadParser.UPLOAD_BASE_URL}/api/paystack/verify/$encodedRef")
+            val conn = (URL("${AssignmentUploadParser.getServerBaseUrl()}/api/paystack/verify/$encodedRef")
                 .openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
+                instanceFollowRedirects = false
                 connectTimeout = 15000
                 readTimeout = 15000
                 setRequestProperty("Accept", "application/json")
             }
 
             val code = conn.responseCode
+            val contentType = conn.contentType
+            val location = conn.getHeaderField("Location")
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val bodyText = stream?.let { BufferedReader(InputStreamReader(it)).use { r -> r.readText() } }.orEmpty()
             conn.disconnect()
+
+            if (isHtmlOrAuthRedirect(code, contentType, bodyText, location)) {
+                return@withContext PaystackVerifyResult(
+                    ok = false,
+                    status = "pending",
+                    requiresBrowserAuth = true,
+                    error = "Server requires browser session to verify transaction."
+                )
+            }
 
             if (bodyText.isBlank()) {
                 return@withContext PaystackVerifyResult(
@@ -182,7 +272,13 @@ object PaystackClient {
                 )
             }
 
-            val json = JSONObject(bodyText)
+            val json = parseJsonObjectSafely(bodyText)
+                ?: return@withContext PaystackVerifyResult(
+                    ok = false,
+                    status = "pending",
+                    error = "Unexpected non-JSON response from Paystack verify endpoint (HTTP $code)."
+                )
+
             if (code !in 200..299) {
                 return@withContext PaystackVerifyResult(
                     ok = false,

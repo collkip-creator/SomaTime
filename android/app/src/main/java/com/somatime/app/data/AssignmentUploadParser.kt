@@ -28,8 +28,41 @@ data class UploadedAttachmentMeta(
 
 object AssignmentUploadParser {
 
-    const val UPLOAD_BASE_URL =
+    const val DEFAULT_SERVER_URL =
         "https://ais-pre-7ftuxpgldqkxiyd3355qsi-415526218247.europe-west2.run.app"
+
+    const val DEV_SERVER_URL =
+        "https://ais-dev-7ftuxpgldqkxiyd3355qsi-415526218247.europe-west2.run.app"
+
+    @Volatile
+    var UPLOAD_BASE_URL: String = DEFAULT_SERVER_URL
+        private set
+
+    fun getServerBaseUrl(): String = UPLOAD_BASE_URL
+
+    fun normalizeServerBaseUrl(raw: String?): String? {
+        val trimmed = raw?.trim()?.trimEnd('/') ?: return null
+        if (trimmed.isEmpty()) return null
+        return try {
+            val u = URL(trimmed)
+            val proto = u.protocol.lowercase(Locale.US)
+            val host = u.host.lowercase(Locale.US)
+            val isLocal = host == "10.0.2.2" || host == "localhost" || host == "127.0.0.1"
+            if (proto == "https" || (proto == "http" && isLocal)) {
+                "${proto}://${u.authority}".trimEnd('/')
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun setServerBaseUrl(raw: String?): Boolean {
+        val normalized = normalizeServerBaseUrl(raw) ?: return false
+        UPLOAD_BASE_URL = normalized
+        return true
+    }
 
     val SAMPLE_CSV_TEMPLATE: String = listOf(
         "type,prompt,options,answer,hint,explanation",
@@ -54,7 +87,7 @@ object AssignmentUploadParser {
         val trimmed = rawUrl?.trim().orEmpty()
         if (!isSafeAttachmentUrl(trimmed)) return null
         return if (trimmed.startsWith("/api/assignments/files/")) {
-            "$UPLOAD_BASE_URL$trimmed"
+            "${getServerBaseUrl()}$trimmed"
         } else {
             trimmed
         }
@@ -399,8 +432,9 @@ object AssignmentUploadParser {
                 .put("dataBase64", base64)
                 .toString()
 
-            val conn = (URL("$UPLOAD_BASE_URL/api/assignments/upload").openConnection() as HttpURLConnection).apply {
+            val conn = (URL("${getServerBaseUrl()}/api/assignments/upload").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
+                instanceFollowRedirects = false
                 connectTimeout = 15_000
                 readTimeout = 20_000
                 doOutput = true
@@ -409,14 +443,27 @@ object AssignmentUploadParser {
                 OutputStreamWriter(outputStream, Charsets.UTF_8).use { it.write(payload) }
             }
             val code = conn.responseCode
+            val contentType = conn.contentType.orEmpty()
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
             val body = stream?.let {
                 BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() }
             } ?: ""
             conn.disconnect()
 
-            if (code in 200..299) {
-                val json = JSONObject(body)
+            val trimmedBody = body.trimStart()
+            val isHtmlOrRedirect = code in 300..399 ||
+                contentType.contains("html", ignoreCase = true) ||
+                trimmedBody.startsWith("<")
+            if (isHtmlOrRedirect) {
+                return@withContext CloudOpResult(
+                    ok = false,
+                    httpCode = code,
+                    errorMessage = "Server returned an HTML sign-in page instead of JSON. Use a public deployed Server URL."
+                )
+            }
+
+            if (code in 200..299 && trimmedBody.startsWith("{")) {
+                val json = JSONObject(trimmedBody)
                 val rawUrl = json.optString("url", "")
                 val resolvedUrl = resolveOpenUrl(rawUrl) ?: ""
                 CloudOpResult(
@@ -430,8 +477,11 @@ object AssignmentUploadParser {
                     )
                 )
             } else {
-                val err = runCatching { JSONObject(body).optString("error") }.getOrNull()
-                    ?.ifBlank { "Upload failed (HTTP $code)" } ?: "Upload failed (HTTP $code)"
+                val err = if (trimmedBody.startsWith("{")) {
+                    runCatching { JSONObject(trimmedBody).optString("error") }.getOrNull()
+                } else {
+                    null
+                }?.ifBlank { "Upload failed (HTTP $code)" } ?: "Upload failed (HTTP $code)"
                 CloudOpResult(ok = false, httpCode = code, errorMessage = err)
             }
         } catch (e: Exception) {

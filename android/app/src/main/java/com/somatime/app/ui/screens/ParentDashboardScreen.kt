@@ -1,5 +1,7 @@
 package com.somatime.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -65,6 +67,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.somatime.app.data.AssignmentUploadParser
 import com.somatime.app.data.CbcCurriculumRepository
 import com.somatime.app.data.PaystackGatewayStatus
 import com.somatime.app.data.PaystackInitResult
@@ -109,6 +112,8 @@ fun ParentDashboardScreen(
     onFetchPaystackStatus: suspend () -> PaystackGatewayStatus?,
     onInitializePaystack: suspend (String, List<String>) -> PaystackInitResult,
     onVerifyPaystack: suspend (String, List<String>, String) -> PaystackVerifyResult,
+    onUpdateServerBaseUrl: (String) -> Boolean,
+    onClearPaystackReturnNotice: () -> Unit,
     onVerifyTeacherCode: suspend (String) -> TeacherVerifyResult,
     onLinkTeacherToChild: (String, LinkedTeacherSummary) -> Unit,
     onUnlinkTeacherFromChild: (String, String) -> Unit
@@ -197,8 +202,12 @@ fun ParentDashboardScreen(
     var pendingPaystackAmountKes by remember { mutableIntStateOf(CbcCurriculumRepository.MONTHLY_LICENSE_KES) }
     var licenseFeedback by remember { mutableStateOf("") }
     var licenseFeedbackIsError by remember { mutableStateOf(false) }
+    var browserCheckoutUrl by remember { mutableStateOf("") }
+    var showServerConfig by remember { mutableStateOf(false) }
+    var serverUrlInput by remember(uiState.serverBaseUrl) { mutableStateOf(uiState.serverBaseUrl) }
+    var serverUrlFeedback by remember { mutableStateOf("") }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(uiState.serverBaseUrl) {
         paystackStatus = onFetchPaystackStatus()
     }
 
@@ -436,6 +445,22 @@ fun ParentDashboardScreen(
                         singleLine = true
                     )
 
+                    if (uiState.paystackReturnNotice.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFFECFDF5),
+                            border = BorderStroke(1.dp, Color(0xFF6EE7B7))
+                        ) {
+                            Text(
+                                text = uiState.paystackReturnNotice,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF065F46)
+                            )
+                        }
+                    }
+
                     Button(
                         onClick = {
                             val cleanPhone = payerPhone.trim()
@@ -448,10 +473,22 @@ fun ParentDashboardScreen(
                             isPayingPaystack = true
                             licenseFeedback = ""
                             licenseFeedbackIsError = false
+                            browserCheckoutUrl = ""
+                            onClearPaystackReturnNotice()
                             scope.launch {
                                 val res = onInitializePaystack(cleanPhone, listOf(child.id))
                                 isPayingPaystack = false
-                                if (!res.ok) {
+                                if (!res.ok && res.requiresBrowserAuth && res.browserCheckoutUrl.isNotBlank()) {
+                                    browserCheckoutUrl = res.browserCheckoutUrl
+                                    licenseFeedbackIsError = false
+                                    licenseFeedback =
+                                        "AI Studio preview requires browser Google session. Opening Chrome to send M-Pesa prompt to $cleanPhone..."
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(res.browserCheckoutUrl))
+                                        )
+                                    }
+                                } else if (!res.ok) {
                                     licenseFeedbackIsError = true
                                     licenseFeedback = res.error.ifBlank { "Could not send Paystack M-Pesa phone prompt." }
                                 } else if (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant") {
@@ -498,11 +535,23 @@ fun ParentDashboardScreen(
                                 isPayingPaystack = true
                                 licenseFeedback = ""
                                 licenseFeedbackIsError = false
+                                browserCheckoutUrl = ""
+                                onClearPaystackReturnNotice()
                                 val targetIds = unpaidChildren.map { it.id }
                                 scope.launch {
                                     val res = onInitializePaystack(cleanPhone, targetIds)
                                     isPayingPaystack = false
-                                    if (!res.ok) {
+                                    if (!res.ok && res.requiresBrowserAuth && res.browserCheckoutUrl.isNotBlank()) {
+                                        browserCheckoutUrl = res.browserCheckoutUrl
+                                        licenseFeedbackIsError = false
+                                        licenseFeedback =
+                                            "AI Studio preview requires browser Google session. Opening Chrome to send M-Pesa prompt to $cleanPhone..."
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(res.browserCheckoutUrl))
+                                            )
+                                        }
+                                    } else if (!res.ok) {
                                         licenseFeedbackIsError = true
                                         licenseFeedback = res.error.ifBlank { "Could not send Paystack M-Pesa phone prompt." }
                                     } else if (res.mode == "paystack_test_demo" || res.mode == "paystack_stk_instant") {
@@ -524,6 +573,52 @@ fun ParentDashboardScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Pay All Unpaid via Paystack (${unpaidChildren.size} × KES $perChildKes = KES $unpaidTotalKes/mo)")
+                        }
+                    }
+
+                    if (browserCheckoutUrl.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = Color(0xFFF0F9FF),
+                            border = BorderStroke(1.dp, Color(0xFF7DD3FC))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "Authenticated Browser Checkout Ready",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0C4A6E)
+                                )
+                                Text(
+                                    "The AI Studio preview server checks your Google login cookie in Chrome before triggering the Paystack M-Pesa STK prompt. Complete payment in Chrome, then tap Refresh if it doesn't auto-return.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF0369A1)
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            runCatching {
+                                                context.startActivity(
+                                                    Intent(Intent.ACTION_VIEW, Uri.parse(browserCheckoutUrl))
+                                                )
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0369A1))
+                                    ) {
+                                        Text("Open M-Pesa Checkout in Browser")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { onRetryCloudSync() },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Refresh Cloud License Status")
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -603,12 +698,14 @@ fun ParentDashboardScreen(
                     }
 
                     val statusText = when {
+                        paystackStatus?.requiresBrowserAuth == true ->
+                            "Paystack Gateway: Preview Proxy Requires Browser Session (Opens Browser for M-Pesa Prompt)"
                         paystackStatus?.configured == true && paystackStatus?.environment == "live" ->
                             "Paystack Gateway: Live Mode Active (M-Pesa + Card + Bank)"
                         paystackStatus?.configured == true ->
                             "Paystack Gateway: Test Mode Active (M-Pesa + Card + Bank)"
                         else ->
-                            "Paystack Gateway: Local Test Simulation (Set PAYSTACK_SECRET_KEY on server for real Checkout)"
+                            "Paystack Gateway: Checking Server (${uiState.serverBaseUrl})"
                     }
                     Text(
                         text = statusText,
@@ -623,6 +720,71 @@ fun ParentDashboardScreen(
                             color = if (!licenseFeedbackIsError) Color(0xFF065F46) else Color(0xFFB91C1C),
                             fontWeight = FontWeight.SemiBold
                         )
+                    }
+
+                    TextButton(
+                        onClick = { showServerConfig = !showServerConfig },
+                        modifier = Modifier.align(Alignment.Start)
+                    ) {
+                        Text(
+                            if (showServerConfig) "Hide Gateway Server URL" else "Gateway Server URL (Optional)",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+
+                    if (showServerConfig) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = serverUrlInput,
+                                onValueChange = {
+                                    serverUrlInput = it
+                                    serverUrlFeedback = ""
+                                },
+                                label = { Text("Deployed or Emulator Backend URL") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                FilterChip(
+                                    selected = serverUrlInput.trim().trimEnd('/') == AssignmentUploadParser.DEFAULT_SERVER_URL,
+                                    onClick = { serverUrlInput = AssignmentUploadParser.DEFAULT_SERVER_URL },
+                                    label = { Text("Shared URL") }
+                                )
+                                FilterChip(
+                                    selected = serverUrlInput.trim().trimEnd('/') == AssignmentUploadParser.DEV_SERVER_URL,
+                                    onClick = { serverUrlInput = AssignmentUploadParser.DEV_SERVER_URL },
+                                    label = { Text("Dev URL") }
+                                )
+                                FilterChip(
+                                    selected = serverUrlInput.trim().trimEnd('/') == "http://10.0.2.2:3000",
+                                    onClick = { serverUrlInput = "http://10.0.2.2:3000" },
+                                    label = { Text("Emulator 10.0.2.2") }
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    val saved = onUpdateServerBaseUrl(serverUrlInput)
+                                    serverUrlFeedback = if (saved) {
+                                        "Gateway URL saved ✓"
+                                    } else {
+                                        "Enter a valid https:// URL (or http://10.0.2.2:3000 for Emulator)."
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = SomaTeal)
+                            ) {
+                                Text("Save URL")
+                            }
+                            if (serverUrlFeedback.isNotEmpty()) {
+                                Text(
+                                    text = serverUrlFeedback,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (serverUrlFeedback.contains("✓")) SomaEmerald else Color(0xFFB91C1C)
+                                )
+                            }
+                        }
                     }
                 }
             }
