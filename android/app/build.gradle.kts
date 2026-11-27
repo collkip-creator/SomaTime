@@ -20,10 +20,10 @@ android {
     defaultConfig {
         // Keep applicationId fixed forever so Android recognizes every new APK as an in-place update
         applicationId = "com.somatime.app"
-        minSdk = 26
+        minSdk = 23
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.1.1"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -31,6 +31,10 @@ android {
     }
 
     signingConfigs {
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+        }
         if (keystorePropertiesFile.exists()) {
             create("release") {
                 val storeFilePath = keystoreProperties.getProperty("storeFile")
@@ -40,6 +44,8 @@ android {
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }
